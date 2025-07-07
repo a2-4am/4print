@@ -1,0 +1,28 @@
+;license:MIT
+;(c) 2024 by 4am
+;
+; public functions
+; - SwapZP
+;
+
+;-->moved to constants
+;zp_array
+;         !fill (last_zp - first_zp + 1)
+
+SwapZP
+; out:   all flags and registers clobbered
+         ; save/restore chunk of zero page
+         ldx   #(<last_zp - <first_zp)
+-        lda   <first_zp, x
+         ldy   zp_array, x
+         sta   zp_array, x
+         sty   <first_zp, x
+         dex
+         bpl   -
+         ; save/restore $200 (only) which is clobbered by ProDOS
+         ; commented out because Print Shop does not use this address
+         ; lda   $200
+         ; ldy   save_200
+         ; sty   $200
+         ; sta   save_200
+         rts

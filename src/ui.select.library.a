@@ -1,0 +1,274 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - FromOtherDiskUpdateLibraryName
+; - FromOtherDiskSelectLibrary
+; - CanSelectLibrary
+;
+
+!zone {
+
+current_library_ptr_lo               ; indexed by asset type
+         !byte <graphics_library     ; 0=graphics
+         !byte <screen_library       ; 1=screen
+         !byte <font_library         ; 2=font
+         !byte <border_library       ; 3=border
+         !byte <dir_saved            ; 4=saved card
+         !byte <dir_saved            ; 5=saved sign
+         !byte <dir_saved            ; 6=saved letterhead
+current_library_ptr_hi
+         !byte >graphics_library
+         !byte >screen_library
+         !byte >font_library
+         !byte >border_library
+         !byte >dir_saved
+         !byte >dir_saved
+         !byte >dir_saved
+
+.library_params
+         !byte SELF_MODIFIED_BYTE    ; item count
+         !word .library_list
+         !word .library_onselectionchange
+         !byte $0A,$14,$27
+
+.library_list
+         !byte $02,$00,$4E,$00,$30,$00
+         !byte $00,$02,$00
+         !word output_buffer
+         !byte $02
+
+FromOtherDiskUpdateLibraryName
+; Modify the UI for the main 'from PS library' screen by
+;   displaying the library name and either
+;   displaying or hiding the instructions about how to select a library.
+; This routine is always called, whether we're loading or saving.
+; This routine is called for all asset types -- built-in and user-saved creations.
+; If loading a built-in type (gfx / screen / font / border), an additional
+;   option is available to select a different library.
+; If loading a 'saved' type (saved card / saved sign / saved letterhead)
+;   OR
+; if saving (gfx from editor / screen from Screen Magic / saved card / saved sign / saved letterhead),
+;   then the displayed library name is always 'SAVED CREATIONS' and
+;   the 'select library' instruction is hidden.
+;   
+; called as subroutine from $730C via jump table
+; in:    |PS_ASSET_TYPE| has been populated by caller
+; out:   X/Y preserved (required based on where we're hooked)
+         txa
+         pha
+         tya
+         pha
+
+         ; clear entire display name after opening quotation mark
+         ldx   #$0F
+         lda   #$20
+-        sta   library_display_name, x
+         dex
+         bpl   -
+
+         jsr   CanSelectLibrary
+         bcs   .update_library_force_saved
+
+         ; display instructions for selecting a library
+         ldx   #0
+-        lda   ctrl_i_to_change, x
+         sta   change_library_text, x
+         beq   +
+         inx
+         bne   -
+
+         ; get current library for this asset type,
+         ; turn it into a display name, and display it
++        ldx   PS_ASSET_TYPE
+         lda   current_library_ptr_lo, x
+         ldy   current_library_ptr_hi, x
+.update_library_set_library_display_name
+         +ST16 .get_library_filename+1
+         ldx   #$00
+         jsr   .get_library_filename
+         tay
+         ; Y=length
+-        inx
+         jsr   .get_library_filename
+         cmp   #$2E
+         bne   +
+         lda   #$20
++        sta   library_display_name-1, x
+         dey
+         bne   -
+         lda   #$22                  ; add ending quotation mark
+         sta   library_display_name, x
+.update_library_name_exit
+         pla
+         tay
+         pla
+         tax
+         rts
+.update_library_force_saved
+         ; hide instructions for selecting a library
+         ldx   #0
+-        lda   change_library_text, x
+         beq   +
+         lda   #$20                  ; space
+         sta   change_library_text, x
+         inx
+         bne   -
+         ; always display 'SAVED CREATIONS' as the current library
++        +LDADDR dir_saved
+         bne   .update_library_set_library_display_name ; always branches
+
+CanSelectLibrary
+; out:   C=0 if 'select library' is available in the current context
+;        C=1 if 'select library' is not available
+;        clobbers A
+         ; are we saving a creation?
+         lda   fod_mode
+         cmp   #1
+         bcs   +                     ; this is a save flow -> not available
+
+         ; are we loading a previously saved creation?
+         lda   PS_ASSET_TYPE
+         cmp   #PS_ASSET_CARD        ; loading saved card/sign/letterhead -> not available
++        rts
+
+LibraryIsDirectory
+; in:    X=asset type
+; out:   Z=1 if current library is 'SAVED.CREATIONS'
+;        Z=0 if not
+;        all registers clobbered
+         lda   current_library_ptr_lo, x
+         ldy   current_library_ptr_hi, x
+         +ST16 .get_library_filename+1
+         ldx   #$00
+         jsr   .get_library_filename
+         tay
+         ; A,Y=length
+-        cmp   dir_saved, x
+         bne   +
+         inx
+         jsr   .get_library_filename
+         dey
+         bne   -
++        rts
+
+FromOtherDiskSelectLibrary
+; called as subroutine from $8B33 via jump table
+; in:    A = ASCII code of key just pressed
+; out:   if not handling keypress, must preserve A + AND #$7F / CMP #$7F
+;        if handling keypress, pulls 2 words from stack and jumps to $72F7
+;          to restart 'from other disk' UI
+         and   #$7F                  ; from original code
+         cmp   #$09                  ; CTRL-I (Tab)
+         bne   .fodsl_return
+         jsr   CanSelectLibrary
+         bcc   .fodsl
+         lda   #$00                  ; swallow keystroke
+.fodsl_return
+         cmp   #$7F                  ; from original code
+         rts
+.fodsl
+         lda   PS_ASSET_TYPE
+         ora   #$80                  ; set bit 7=1 to enumerate assets in SAVED.CREATIONS/ directory
+         tax                         ; even though this isn't a save flow
+                                     ; (used to see if there are saved creations that we could load)
+         +LDADDR output_buffer
+         jsr   EnumerateDirectory
+         lda   PS_ITEMS
+         beq   .no_saved_creations
+
+         ; add 'SAVED CREATIONS' as first menu item, before other libraries
+         sec
+         php
+         ldx   dir_saved
+         ldy   #0
+-        lda   dir_saved+1, y
+         cmp   #$2E
+         bne   +
+         lda   #$20
++        sta   output_buffer, y
+         iny
+         dex
+         bne   -
+         lda   #0
+         sta   output_buffer, y
+         iny
+         tya
+         ldy   #>output_buffer
+         bne   +                     ; always branches
+
+.no_saved_creations
+         clc
+         php
+         +LDADDR output_buffer
+
++        ldx   #asset_nufx           ; 7 = enumerate NuFX archives
+         jsr   EnumerateDirectory
+         ldx   PS_ITEMS              ; total menu items
+         plp
+         bcc   +
+         inx                         ; add 1 because we manually inserted 'SAVED CREATIONS'
++        stx   .library_params       ; note: must be 1-12, no support for multi-page here
+         jsr   PS_CLEARSCREEN
+         ldx   #7                    ; copy list params into place
+-        lda   .library_params, x
+         sta   PS_MENU_PARAMS, x
+         dex
+         bpl   -
+         lda   #1                    ; first item selected
+         sta   PS_MENU_DEFAULT
+         jsr   PS_MENU
+         ldx   PS_MENUKEY
+         cpx   #$0D                  ; Return
+         bne   .post_library_return
+         ; A=selected menu item
+         ; find display name
+         tax
+         ldy   #$FF
+--       dex
+         beq   +
+-        iny
+         lda   output_buffer, y
+         bne   -
+         beq   --
++        iny
+         ; Y=index into output_buffer of PS-style display name (zero-terminated)
+         ldx   PS_ASSET_TYPE
+         lda   current_library_ptr_lo, x
+         sta   .set_library_filename+1
+         lda   current_library_ptr_hi, x
+         sta   .set_library_filename+2
+         ldx   #$00
+-        lda   output_buffer, y
+         beq   .display_name_end
+         cmp   #$20
+         bne   +
+         lda   #$2E
++        inx
+         jsr   .set_library_filename
+         iny
+         bne   -                     ; always branches
+.display_name_end
+         lda   #$22                  ; add ending quotation mark
+         sta   library_display_name, x
+         txa
+         ldx   #$00
+         jsr   .set_library_filename
+.post_library_return
+         jsr   PS_CLEARSCREEN
+         pla
+         pla
+         pla
+         pla
+         jmp   PS_REENTER_FOD
+
+.get_library_filename
+         lda   SELF_MODIFIED_WORD, x
+         rts
+
+.set_library_filename
+         sta   SELF_MODIFIED_WORD, x
+.library_onselectionchange
+         rts
+
+}

@@ -1,0 +1,28 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - ShowVersion
+;
+
+!zone {
+
+ShowVersion
+; called from $760A via jump table
+; Original displays 'VERSION 2.0' on bottom line of frame
+; when you press <Ctrl-V> at the main menu.
+; We just override to display our version string instead.
+; in:    none
+; out:   all registers/flags clobbered
+         ldx   #<.version_list
+         ldy   #>.version_list
+         jmp   PS_DISPLAY_GFX
+.version_list
+         !byte $03,$02,$8C,$00,$B8,$00
+         !byte $00,$02,$00
+         !word .version_text
+         !byte $02
+.version_text
+         !raw  "TOTAL REPRINT BETA 1",$00,$FF
+
+}

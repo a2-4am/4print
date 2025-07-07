@@ -1,0 +1,44 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; misc. MLI routines
+;
+; public functions:
+; - Quit
+; - CloseAllFiles
+; - ToRootDirectory
+; - ToSubdirectory
+;
+
+!zone {
+
+parm_setprefix
+         !byte 1
+         !word SELF_MODIFIED_WORD
+
+Quit
+         jsr   PRODOS_MLI
+         !byte CMD_QUIT
+         !word +
++        !byte 4
+
+CloseAllFiles
+         jsr   PRODOS_MLI
+         !byte CMD_CLOSE
+         !word +
+         rts
++        !byte 1
+         !byte 0
+
+ToRootDirectory
+         +LDADDR dir_root
+ToSubdirectory
+; in:    dir_root populated (done at startup)
+;        A/Y -> length-prefixed directory name
+         +ST16 parm_setprefix+1
+         jsr   PRODOS_MLI
+         !byte CMD_SETPREFIX
+         !word parm_setprefix
+         rts
+
+}

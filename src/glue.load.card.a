@@ -1,0 +1,223 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - LoadCard
+;
+
+!zone {
+
+.parm_load_card_open
+         !byte 3
+.parm_load_card_open_name
+         !word parsed_filename
+         !word PRODOS_BUFFER
+.parm_load_card_open_refnum
+         !byte SELF_MODIFIED_BYTE
+
+.parm_load_card_read
+         !byte 4
+.parm_load_card_read_refnum
+         !byte SELF_MODIFIED_BYTE
+.parm_load_card_read_address
+         !word SELF_MODIFIED_WORD
+.parm_load_card_read_length
+         !word SELF_MODIFIED_WORD
+         !word $0000
+
+.parm_load_card_seek
+         !byte 2
+.parm_load_card_seek_refnum
+         !byte SELF_MODIFIED_BYTE
+.parm_load_card_seek_offset
+         !byte SELF_MODIFIED_BYTE
+         !byte SELF_MODIFIED_BYTE
+         !byte SELF_MODIFIED_BYTE
+
+LoadCard
+; in:    none
+; out:   exits via PS_RESUME_LOAD_CARD with Z=1 on success or Z=0 on error
+         ldx   PS_MAIN_TYPE
+         inx
+         stx   $B5
+         lda   #$60                  ; patch
+         sta   $B70
+         jsr   $AF1                  ; construct DOS-style BLOAD string but don't load
+         ; X/Y -> BLOAD string
+         lda   #$20                  ; unpatch
+         sta   $B70
+
+         stx   zp_array-first_zp+PTR
+         sty   zp_array-first_zp+PTR+1
+         jsr   SwapZP
+         jsr   ParsePSFilename
+         +LDADDR dir_saved
+         jsr   ToSubdirectory
+         jsr   PRODOS_MLI
+         !byte CMD_OPEN
+         !word .parm_load_card_open
+         bcc   +
+         jmp   .load_card_error
++
+         lda   .parm_load_card_open_refnum
+         sta   .parm_load_card_read_refnum
+         sta   .parm_load_card_seek_refnum
+
+         +LDADDR PS_CARD_DATA
+         +ST16 .parm_load_card_read_address
+         +LDADDR $0500
+         +ST16 .parm_load_card_read_length
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word .parm_load_card_read
+         bcc   +
+         jmp   .load_card_error
++
+         lda   PS_MAIN_TYPE
+         cmp   #PS_MAIN_TYPE_LETTERHEAD
+         bne   +
+         +LDADDR PS_INSIDE_GFX_DATA  ; letterhead has front and inside graphics IDs swapped
+         jmp   ++
++        +LDADDR PS_FRONT_GFX_DATA
+++       ldx   PS_FRONT_GFX_ID
+         jsr   .maybe_load_gfx
+         bcs   .load_card_error
+
+         lda   PS_MAIN_TYPE
+         cmp   #PS_MAIN_TYPE_LETTERHEAD
+         bne   +
+         +LDADDR PS_FRONT_GFX_DATA   ; letterhead has front and inside graphics IDs swapped
+         jmp   ++
++        +LDADDR PS_INSIDE_GFX_DATA
+++       ldx   PS_INSIDE_GFX_ID
+         jsr   .maybe_load_gfx
+         bcs   .load_card_error
+
+         lda   PS_MAIN_TYPE
+         cmp   #PS_MAIN_TYPE_SIGN
+         beq   +
+         lda   PS_INSIDE_FONT_ID     ; cards and letterhead have front and inside font IDs swapped
+         jmp   ++
++        lda   PS_FRONT_FONT_ID
+++       ldx   #PS_FRONT
+         jsr   .maybe_load_font
+         bcs   .load_card_error
+
+         lda   PS_MAIN_TYPE
+         cmp   #PS_MAIN_TYPE_SIGN
+         beq   +
+         lda   PS_FRONT_FONT_ID      ; cards and letterhead have front and inside font IDs swapped
+         jmp   ++
++        lda   PS_INSIDE_FONT_ID
+++       ldx   #PS_INSIDE
+         jsr   .maybe_load_font
+         bcs   .load_card_error
+
+         lda   PS_MAIN_TYPE
+         cmp   #PS_MAIN_TYPE_LETTERHEAD
+         beq   .load_card_success    ; letterhead does not have borders, so we're done
+
+         +LDADDR FRONT_BORDER_DATA
+         ldx   PS_FRONT_BORDER_ID
+         jsr   .maybe_load_border
+         bcs   .load_card_error
+
+         +LDADDR INSIDE_BORDER_DATA
+         ldx   PS_INSIDE_BORDER_ID
+         jsr   .maybe_load_border
+
+.load_card_error
+; in:    C=0 if success
+;        C=1 if error and A = MLI return code
+         bcc   .load_card_success
+         cmp   #MLI_FILE_NOT_FOUND
+         beq   .load_card_file_not_found
+         lda   #PS_ERR_IO_ERROR
+         +HIDE_NEXT_2_BYTES
+.load_card_file_not_found
+         lda   #PS_ERR_FILE_NOT_FOUND
+         +HIDE_NEXT_2_BYTES
+.load_card_success
+         lda   #PS_ERR_NONE
+         sta   PS_DISK_ERROR
+         tax
+         php
+         jsr   CloseAllFiles
+         jsr   ToRootDirectory
+         jsr   SwapZP
+         lda   PS_DISK_ERROR
+         plp
+         jmp   PS_RESUME_LOAD_CARD
+
+.maybe_load_gfx
+; in:    X = GFX ID
+;        A/Y -> load address
+; out:   C=0 if success
+;        C=1 if error and A = MLI return code
+         cpx   #PS_HAS_EXT_GFX
+         bne   .do_nothing_and_be_happy_about_it
+         ldx   #$40
+         stx   .parm_load_card_read_length
+         ldx   #$02
+         bne   .load_ext             ; always branches
+.maybe_load_border
+; in:    X = border ID
+;        A/Y -> load address
+; out:   C=0 if success
+;        C=1 if error and A = MLI return code
+         cpx   #PS_HAS_EXT_BORDER
+         bne   .do_nothing_and_be_happy_about_it
+         ldx   #$00
+         stx   .parm_load_card_read_length
+         inx
+.load_ext
+         stx   .parm_load_card_read_length+1
+         +ST16 .parm_load_card_read_address
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word .parm_load_card_read
+         rts
+
+.do_nothing_and_be_happy_about_it
+         clc
+         rts
+
+.maybe_load_font
+; in:    A = font ID
+;        X = PS_FRONT or PS_INSIDE
+; out:   C=0 if success
+;        C=1 if error and A = MLI return code
+         cmp   #PS_HAS_EXT_FONT
+         bne   .do_nothing_and_be_happy_about_it
+         stx   .maybe_load_font_tmpx
+         jsr   .get_current_file_offset
+         bcs   +
+.maybe_load_font_tmpx=*+1
+         ldx   #SELF_MODIFIED_BYTE
+         jsr   SetSelectedFontAsEmbedded
+         jsr   .seek_forward_past_embedded_font
++        rts
+
+.get_current_file_offset
+; in:    file is open and .parm_load_card_refnum is set
+; out:   C=0 if success and A/Y = lower 2 bytes of file offset
+;        C=1 if error
+         jsr   PRODOS_MLI
+         !byte CMD_POS
+         !word .parm_load_card_seek
+         +LD16 .parm_load_card_seek_offset
+         rts
+
+.seek_forward_past_embedded_font
+; in:    file is open and .parm_load_card_refnum is set
+; out:   C=0 if success
+;        C=1 if error and A = MLI return code
+         lda   .parm_load_card_seek_offset+1
+         clc
+         adc   #$18
+         sta   .parm_load_card_seek_offset+1
+         jsr   PRODOS_MLI
+         !byte CMD_SEEK
+         !word .parm_load_card_seek
+         rts
+}

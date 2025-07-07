@@ -1,0 +1,91 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - Bsave
+;
+
+!zone {
+
+.parm_bsave_create
+         !byte 7
+         !word parsed_filename
+         !byte $C3
+         !byte $06
+.parm_bsave_create_address
+         !word SELF_MODIFIED_WORD
+         !byte $01
+         !word 0
+         !word 0
+
+.parm_bsave_open
+         !byte 3
+.parm_bsave_open_name
+         !word parsed_filename
+         !word PRODOS_BUFFER
+.parm_bsave_open_refnum
+         !byte SELF_MODIFIED_BYTE
+
+.parm_bsave_write
+         !byte 4
+.parm_bsave_write_refnum
+         !byte SELF_MODIFIED_BYTE
+.parm_bsave_write_address
+         !word SELF_MODIFIED_WORD    ; address of data to write
+.parm_bsave_write_length
+         !word SELF_MODIFIED_WORD    ; length of data to write
+         !word 0
+
+Bsave
+; in:    X/Y -> BSAVE command (DOS-style, with keywords like A$,L$,D)
+; out:   |PS_DISK_ERROR| contains 0 on success, or error code on failure (see constants)
+         stx   zp_array-first_zp+PTR
+         sty   zp_array-first_zp+PTR+1
+         lda   #$00
+         sta   PS_DISK_ERROR
+         jsr   SwapZP
+         jsr   ParsePSFilename
+         lda   suffix_address
+         ora   suffix_address+1
+         beq   .missing_keywords
+         lda   suffix_length
+         ora   suffix_length+1
+         beq   .missing_keywords
+         +LD16 suffix_address
+         +ST16 .parm_bsave_create_address
+         +ST16 .parm_bsave_write_address
+         +LD16 suffix_length
+         +ST16 .parm_bsave_write_length
+         lda   suffix_drive          ; ParsePSFilename will set this to $00 if no D keyword was specified
+                                     ; otherwise it will be $01 or $02
+         cmp   #$02
+         bne   +                     ; ',D1' or no D value, so write to file in root PS directory (saved at program startup)
+         +LDADDR dir_saved
+         jsr   ToSubdirectory        ; ',D2' so write to SAVED/ subdirectory
++
+         jsr   PRODOS_MLI
+         !byte CMD_CREATE
+         !word .parm_bsave_create
+         jsr   PRODOS_MLI
+         !byte CMD_OPEN
+         !word .parm_bsave_open
+         ldx   .parm_bsave_open_refnum
+         stx   .parm_bsave_write_refnum
+         jsr   PRODOS_MLI
+         !byte CMD_WRITE
+         !word .parm_bsave_write
+         bcc   .bl_cleanup_and_return
+.missing_keywords
+         lda   #$FF
+         sta   PS_DISK_ERROR
+.bl_cleanup_and_return
+         jsr   CloseAllFiles
+         lda   suffix_drive
+         cmp   #2
+         bne   +
+         jsr   ToRootDirectory
++        jsr   SwapZP
+         lda   PS_DISK_ERROR
+         rts
+
+}

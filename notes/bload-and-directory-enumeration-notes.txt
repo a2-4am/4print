@@ -1,0 +1,148 @@
+HELLO (binary, A$800, L$7C7) contains persistent entry points for BLOAD, BSAVE, DELETE, accessed via jump table
+
+$809 -> $C62 - BLOAD
+$80C -> $C66 - BSAVE
+$837 -> $C5E - DELETE
+
+BLOAD shim
+- X/Y -> filename
+  bit 7=0
+  zero-terminated
+  may have keywords suffix like ",A$4000,L$1FF8,D1"
+- needs to convert DOS-style filename+suffixes to ProDOS-compatible filename and parse address out of it (if any)
+  otherwise MLI GET_FILE_INFO to get aux_type (= load address)
+- then the usual MLI OPEN/READ/CLOSE
+- $80F holds PS-specific error code
+  0x00 = no error
+  0x04 = disk is write-protected
+  0x06 = file not found
+  0x09 = disk full
+  0x0A = file locked
+  0xFF = disk error
+
+Shims can live at $9D00+ since this was originally used for DOS
+probably $9B00+ actually
+confirmed SYSLIB goes to $9AA4, so $9AA5+ is free
+plenty(?) of room for our persistent code and a regular 1K ProDOS buffer
+
+on startup, DOS loads HELLO, which loads
+- SYSLIB
+- TPAGE
+- MENULIB
+- CONFIG
+- MAINPICS
+- PRCOMS
+
+"from other disk" uses a DOS-specific directory enumeration routine
+  to build list of relevant files for a given asset class (graphic/font/border/screen)
+  /!\ original uses $D000/LC2 to store this list, which conflicts with ProDOS
+  $7F90 loads 0xD0 into A and stores in selection UI and in $13 which is used in ($12),Y to store characters from filenames
+  we can change this byte to any other address(hi) so selection UI will use it too
+  note that list can grow very large (>2 pages, unclear how big exactly but graphics disks have 100 files on each side)
+
+$7F6A directory enumeration routine entry point
+- calls $7019 to ensure data disk is in designated drive
+- calls $03D9 entry point to read T11,S0F into $8200..$82FF
+- $7912 (byte) contains type of asset we're looking for
+    $00 - graphic (4 sectors)
+    $01 - screen (33 or 34 sectors (decimal))
+    $02 - font (FONT.*)
+    $03 - border (BORD.*)
+    $04 - saved greeting card (CARD.*)
+    $05 - saved sign (SIGN.*)
+    $06 - saved letterhead (LETT.*)
+- $8184 contains non-delimited array of 4-character filename prefixes for asset types $02-$06
+    FONT
+    BORD
+    CARD
+    SIGN
+    LETT
+- builds delimited list of display names at ($12)
+  "NAME1",$00
+  "NAME2",$00
+  ...
+  ...up to 12 names per "page"...
+  ...then $FF byte to indicate end of page...
+  ...
+  "NAME12",$00,$FF
+- also builds array of start-of-page addresses at $8172 (lo bytes) and $817B (hi bytes)
+  THIS MEANS THERE CAN ONLY BE 9 PAGES OF 12 = 108 ITEMS TOTAL
+  if we want more than that (probably -- graphics packs are 120 each) then we'll have to move both of these arrays
+
+/!\ original also uses LC2 for larger data, possibly font cache?
+  confirmed, $D000..$E7FF is used as font cache for external font on front of greeting card
+  $E800..$FFFF as font cache for custom font on inside of greeting card
+  at $B6C, font file is BLOADed into $4000-$57FF ($9190 contains BLOAD string by this point)
+  need to keep this load because edit-text screen auto-adjusts based on font size/width properties
+  at $BAE, first $0C bytes (font properties?) are copied into buffer at $816 (maybe used by edit-text screen?)
+  at $BD2, font is cached into $D000+ or $E800+ (need to disable this)
+  note: same routine is reused somehow to cache other (smaller) things, not sure what yet (borders?), into $DE00 and $DF00
+  $CD8 copies cached font back into $6000-$77FF (need to change this to BLOAD)
+
+$806 JMPs to $AEC which is the entry point for loading any asset from an external file and caching it into LCRAM
+  (not used for graphics because they are only stored in main memory)
+  (looks like this is *only* used for the post-1984 support for "other disk" borders and fonts)
+- on entry,
+  A = asset type (stored in $B5)
+  $8380 contains 0-terminated display name (not incl. prefix e.g. "FONT.", so for "FONT.BONES" $8380 just contains "BONES",0)
+  $8300 contains 0 if working on front of greeting card, 1 if working on inside
+- $AEE JSR $BBA which swaps some region of LCRAM with $4000+ (up to $18 pages) based on asset type
+- $AF1 constructs DOS-style filename+suffixes into $9190+
+- $B67 JSR $7019 to ensure data disk is in drive (+ask to swap disks if 1-drive setup)
+- $B6C JSR $C62 to BLOAD ($9190 contains BLOAD string by this point)
+- $B73 JSR $6F00 to check if file load failed and display disk error message
+  successful execution continues at $B85
+- $B85 checks asset type and for fonts makes a bunch of runtime patches to the file data we just loaded into $4000+
+  at $BAE, first $0C bytes (font properties?) are copied into buffer at $816 (maybe used by edit-text screen?)
+- falls through to $BBA to swap loaded data back into LCRAM
+- can't just disable cache-to-LCRAM because there are real things at $4000
+
+$810 JMPs to $CB7 which is the entry point to load a font (incl. built-in)
+- on entry,
+  A = font number ($01-$08 = built-in font; $09 = "other disk"; $0A = no font)
+- if built-in, constructs filename ("F" + numeral + ",D1")
+- if "other disk", branches to $CD8 to copy data from LCRAM cache
+- $CD8 can't directly re-use routine at $AEC without some patches
+- loads at $6000 instead of $4000
+  LDA 0x36
+  STA $B15
+- also patches are applied incorrectly (to $40xx, need $60xx)
+  LDA 0x60
+  STA $B91
+  STA $B96
+  STA $B9B
+  STA $BA0
+  STA $BA5
+  STA $BAA
+  STA $BB2
+- can't call $7019 (check for data disk) because it's not in memory
+  LDA 0xEA
+  STA $B67
+  STA $B68
+  STA $B69
+- can't call $6F00 (check for file load error) because that's not in memory either
+  LDA 0xD0
+  STA $B77
+  LDA 0x0C
+  STA $B78
+- this is a terrible plan
+
+new problem #1:
+if we override $810 altogether (exit via CB7 for built-in fonts)
+by the time printing/previewing starts and $810 is called,
+  ***** $7912 (PS_ASSET_TYPE) is NO LONGER AVAILABLE *****
+this means previously held abstraction layer for BLOAD no longer holds
+  because it assumes it can figure out which subdirectory to use
+  and that's not true
+
+new problem #2:
+greeting cards potentially have two fonts (one for front, one for inside)
+  and two borders, each of which could come from a different PS library
+so on font selection (when we load font properties) we also need to cache
+  the name of the PS library we used
+$8300 (PS_FRONT_OR_INSIDE) is still available and is consulted by original code
+  so we do not have to keep track of that separately
+PS keeps the both font shortnames in memory for some reason so we can reuse those
+  (still need to rebuild complete name with "FONT." or "BORD." prefix)
+**or** we could let the routine at $AF1 (which we already call from OnFontSelected)
+  build the BLOAD string at $9190 then copy that entire thing into a private cache

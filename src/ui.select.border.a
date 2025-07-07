@@ -1,0 +1,312 @@
+; Border HGR draw routine
+;     Copyright 1985
+;  by Roland Gustafsson
+
+!zone {
+
+HIRES1   = $40
+HIRES2   = $42
+HIRES3   = $44
+MNZ      = $80
+MINIX    = MNZ
+MINIY    = MNZ+1
+MINIWITH = MNZ+2
+MINIHITE = MNZ+3
+TMP      = $F0
+TMP0     = TMP
+TMP1     = TMP+1
+TMP2     = TMP+2
+TMP3     = TMP+3
+TMP4     = TMP+4
+TMP5     = TMP+5
+;
+; Absolute references:
+;
+BORDBASE =   GFX_BUFFER
+;
+; Temporary table where miniature
+; is built.
+;
+MINITEMP =   BORDBASE+$100
+MINIBUFF =   MINITEMP
+TEMPTBL  =   MINITEMP+28*3
+;
+; Constants:
+;
+MINIX1   =   6
+MINIY1   =   40;23
+MINIW1   =   14
+MINIH1   =   9
+
+MINITURE ldx #MINIX1
+         ldy #MINIY1
+         stx MINIX
+         sty MINIY
+         ldx #MINIW1
+         ldy #MINIH1
+         clc
+;-----------
+;
+; Enter with X=width
+;            Y=height
+;
+; z-page MINIX=x position
+;        MINIY=y position
+;
+MINITUR2 dex
+         stx MINIWITH
+         dey
+         sty MINIHITE
+;
+; If carry set, then don't do
+; the compression, data is all
+; ready at MINIBUFF.
+;
+         bcs *+5
+         jsr MINICALC
+;
+; Top line
+;
+         ldy #0
+         jsr MINILINE
+;
+; Do left and right edges
+;
+-        iny
+         cpy MINIHITE
+         beq MINILINE
+         ldx #0
+         jsr MINISTR2
+         ldx MINIWITH
+         jsr MINISTR2
+         jmp -
+;
+; Given Y, do one line
+;
+MINILINE ldx MINIWITH
+         jsr MINISTR0
+-        dex
+         beq +
+         jsr MINISTR1
+         jmp -
++        jmp MINISTR0
+;
+; Interpolate from 23x14 to 14x14
+; for each of the 3 sections.
+;
+; TMP0.1 points into BORDBASE
+; TMP2.3 points into MINIBUFF
+;
+MINICALC ldy #<(BORDBASE+4)
+         lda #>(BORDBASE+4)
+         sty TMP0
+         sta TMP1
+         ldy #<MINIBUFF
+         lda #>MINIBUFF
+         sty TMP2
+         sta TMP3
+;
+; Now squish the three sections
+;
+         lda #3
+-        pha
+;
+; Do top part then bottom part
+;
+         ldy #24
+         jsr MINISQSH
+         ldy #0
+         jsr MINISQSH
+;
+         lda TMP0
+         clc
+         adc #48
+         sta TMP0
+;
+         pla
+         sbc #0
+         bne -
+         rts
+;
+; Squish 23 vertically oriented bytes
+; to 14 horizontally oriented bytes.
+;
+MINISQSH ldx #0
+.b0      lda MINIORTB,X
+         sta TMP4
+;
+         lda #0
+.b1      ora (TMP0),Y
+         iny
+         dec TMP4
+         bne .b1
+;
+         stx .b3+1
+         asl
+         sta TMP4
+         ldx #12
+;
+.b2      lsr TEMPTBL,X
+         lsr TEMPTBL+1,X
+         lda #0
+         ror
+         ror
+         ora TEMPTBL,X
+         sta TEMPTBL,X
+         lda #0
+         asl TMP4
+         ror
+         ror
+         ora TEMPTBL+1,X
+         sta TEMPTBL+1,X
+         dex
+         dex
+         bpl .b2
+;
+.b3      ldx #00
+         inx
+         cpx #14
+         bcc .b0
+;
+         ldy #13
+.b4      lda TEMPTBL,Y
+         ;eor #$7F
+         sta (TMP2),Y
+         dey
+         bpl .b4
+         lda TMP2
+         clc
+         adc #14
+         sta TMP2
+         rts
+;
+; Table which tells how many
+; bytes to OR together
+;
+MINIORTB !byte $02,$01,$02,$02,$01,$02,$02
+         !byte $01,$02,$01,$02,$02,$01,$02
+;
+; Draw a section given:
+;
+;  A=section to use
+;  X,Y=position
+;
+;  Computed:
+;  TMP0.1= MINIBUFF pointer
+;
+MINISTR0 lda #0
+         +HIDE_NEXT_2_BYTES
+MINISTR1 lda #28
+         +HIDE_NEXT_2_BYTES
+MINISTR2 lda #(<MINIBUFF+56)
+         sta TMP0
+         lda #>MINIBUFF
+         sta TMP1
+         stx MINIXSAV
+         sty MINIYSAV
+         lda #0
+         cpx MINIWITH
+         bne *+4
+         ora #2
+         cpy MINIHITE
+         bne *+4
+         ora #1
+         and BORDBASE
+         pha
+;
+; Compute X and Y screen addresses
+;
+; X= X*2+MINIX
+;
+         txa
+         asl
+         adc MINIX
+         sta MINIXPOS
+;
+; Y= Y*14+MINIY
+;
+         tya
+         asl
+         sta TMP2
+         asl
+         asl
+         asl
+         adc MINIY
+         sec
+         sbc TMP2
+         sta MINIYPOS
+;
+         pla
+         lsr
+         and #1
+         sta MINIFLIP
+;
+; If flipping bottom, then start from
+; end of MINIBUFF data.
+;
+         ldy #$E6                      ; inc
+         lda #0
+         bcc +
+         lda #26
+         ldy #$C6                      ; dec
++        clc
+         adc TMP0
+         sta TMP0
+         sty MINIBMD0
+         sty MINIBMD1
+         ldx #14
+;
+; Miniature border section store loop
+;
+MINISLOP ldy #00
+MINIYPOS =   *-1
+         lda YBASELO,Y
+         clc
+         adc #00
+MINIXPOS =   *-1
+         sta HIRES1
+         lda YBASEHI,Y
+         sta HIRES1+1
+;
+; Now do a single row
+;
+         ldy #0
+         lda #00
+MINIFLIP =   *-1
+         bne +
+;
+; Standard
+;
+         lda (TMP0),Y
+         sta (HIRES1),Y
+         iny
+         lda (TMP0),Y
+         jmp ++
+;
+; Flip horizontally
+;
++        lda (TMP0),Y
+         tay
+         lda FLIPPER,Y
+         ldy #1
+         sta (HIRES1),Y
+         lda (TMP0),Y
+         tay
+         lda FLIPPER,Y
+         ldy #0
+;
+++       sta (HIRES1),Y
+MINIBMD0 inc TMP0
+MINIBMD1 inc TMP0
+;
+         inc MINIYPOS
+         dex
+         bne MINISLOP
+;
+         ldx #00
+MINIXSAV =   *-1
+         ldy #00
+MINIYSAV =   *-1
+         rts
+
+}

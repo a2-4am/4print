@@ -1,0 +1,785 @@
+;license:MIT
+;(c) 2025 by qkumba
+;
+; public functions
+; - NuFXReadFile
+; - NuFXReadFileAt
+; - NuFXFindFirst
+; - NuFXFirstNext
+; - NuFXWriteFile
+;
+
+!zone {
+
+zx0=1
+write=0
+
+stack        = $fe ; 2 bytes
+src          = $fc ; 2 bytes
+dst          = $fa ; 2 bytes
+!if zx0=1 {
+  hl           = $f8 ; 2 bytes
+  off          = $f6 ; 2 bytes
+  tmpb         = $f5
+  tmpa         = $f4
+}
+
+NuFXReadFile
+; in:    X = refnum of already-open NuFX file
+;        stack contains 6 bytes of parameters
+;          name    [word] pointer to ProDOS-style name
+;          buffer  [word] address to store data, or $0000 to use file's default address
+;          size    [word] bytes to read, or $FFFF for entire file
+; out:   all registers modified
+;        carry set on error
+         !byte $E0                   ; mask next byte (CPX, clears carry as a side-effect)
+!if write=1 {
+NuFXWriteFile
+; in:    X = refnum of already-open NuFX file
+;        stack contains 6 bytes of parameters
+;          name    [word] pointer to ProDOS-style name
+;          buffer  [word] address of data to write
+;          size    [word] bytes to write, or $FFFF for entire file
+; out:   all registers modified
+;        carry set on error
+}
+         sec
+
+         stx   refnum1
+         pla
+         sta   stack
+         pla
+         sta   stack + 1
+         php
+         pla
+         tax                         ; flags
+         ldy   #0
+-        iny
+         lda   (stack), y
+         sta   dst - 1, y
+         cpy   #2
+         bne   -
+-        iny
+         lda   (stack), y
+         sta   buffer2 - 3, y
+         cpy   #6
+         bne   -
+         clc
+         tya
+         adc   stack
+         tay
+         lda   stack + 1
+         adc   #0
+         pha
+         tya
+         pha
+         txa
+         pha                         ; flags
+         ldx   refnum1
+         +LDADDR nufx_dirbuff
+         jsr   NuFXFindFirst
+         bcs   .read_ret
+--       lda   nufx_dirbuff
+         and   #$0f
+         ldy   #0
+         cmp   (dst), y
+         bne   +
+         tay
+-        lda   nufx_dirbuff, y
+         cmp   (dst), y
+         beq   .keepname
++        jsr   NuFXFindNext
+         bcc   --
+
+.read_ret
+         pla                         ; flags
+         rts
+
+.keepname
+         dey
+         bne   -
+         plp
+         ;bcs   writefile_i
+         lda   buffer2
+         ora   buffer2+1
+         bne   +
+         ; no read address, so use the file's default one
+         ; which has by now been copied to the entry buffer
+         ; pointed to by (src)
+         ldy   #kFileEntryAuxType
+         lda   (src), y
+         sta   buffer2
+         iny
+         lda   (src), y
+         sta   buffer2+1
++        bne   readfile_i ; always
+
+!if write=1 {
+writefile_i
+         lda   nufx_readbuff + nufx_data_format
+         cmp   #1                    ; only stored
+         bcs   ++
+         jsr   PRODOS_MLI
+         !byte CMD_SEEK
+         !word ce_parms1
+         ldx   size3 + 1
+         inx
+         bne   +
+         lda   nufx_readbuff + nufx_data_size
+         sta   size3
+         lda   nufx_readbuff + nufx_data_size + 1
+         sta   size3 + 1
++        jsr   PRODOS_MLI
+         !byte CMD_WRITE
+         !word ca_parms3
+         jmp   checksum
+++       rts
+}
+
+NuFXReadFileAt
+; in:    X = refnum of already-open NuFX file
+;        stack contains 7 bytes of parameters
+;          offset  [3 bytes] offset into NuFX file
+;          buffer  [word] address to store data
+;          size    [word] bytes to read, or $FFFF for entire file
+; out:   all registers modified
+;        carry set on error
+         stx   refnum1
+         stx   refnum2
+         stx   refnum3
+         stx   refnum4
+         pla
+         sta   stack
+         pla
+         sta   stack + 1
+         ldy   #0
+-        iny
+         lda   (stack), y
+         sta   offset - 1, y
+         cpy   #3
+         bne   -
+-        iny
+         lda   (stack), y
+         sta   buffer2 - 4, y
+         cpy   #7
+         bne   -
+         clc
+         tya
+         adc   stack
+         tay
+         lda   stack + 1
+         adc   #0
+         pha
+         tya
+         pha
+         jsr   findnext_i2
+
+readfile_i
+         jsr   PRODOS_MLI
+         !byte CMD_SEEK
+         !word ce_parms1
+         ldx   size3 + 1
+         inx
+         bne   +
+         lda   nufx_readbuff + nufx_data_size
+         sta   size3
+         lda   nufx_readbuff + nufx_data_size + 1
+         sta   size3 + 1
++
+!if zx0=1 {
+         lda   nufx_readbuff + nufx_data_format
+         beq   skip_set
+         lda   buffer2
+         sta   dst
+         lda   buffer2 + 1
+         sta   dst + 1
+         clc
+         ldx   size3
+         txa
+         pha
+         adc   buffer2
+         sta   src
+         ldy   size3 + 1
+         tya
+         pha
+         adc   buffer2 + 1
+         sta   src + 1
+         cpx   nufx_readbuff + nufx_comp_size
+         tya
+         sbc   nufx_readbuff + nufx_comp_size + 1
+         bcc   +
+         ldx   nufx_readbuff + nufx_comp_size
+         ldy   nufx_readbuff + nufx_comp_size + 1
+         stx   size3
+         sty   size3 + 1
++        sec
+         lda   src
+         sbc   size3
+         tax
+         lda   src + 1
+         sbc   size3 + 1
+         tay
+         clc
+         txa
+         adc   #4
+         tax
+         bcc   +
+         iny
++        sta   buffer2
+         sta   src
+         sty   buffer2 + 1
+         sty   src + 1
+
+skip_set
+         php
+}
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word ca_parms3
+
+!if zx0=1 {
+         plp
+         bne   unpack
+}
+         rts
+
+!if zx0=1 {
+unpack ;unpacker entrypoint
+         pla
+         sta   size3 + 1
+         pla
+         sta   size3
+
+         ldx   #$ff
+         stx   off+1
+         stx   off
+         inx
+         stx   tmpb
+         stx   tmpa
+         ldy   #0
+
+dzx0s_literals
+         jsr   dzx0s_elias
+cop0     jsr   get_byte
+         jsr   put_byte
+         jsr   decbc
+         bne   cop0
+         asl   tmpa
+         bcs   dzx0s_new_offset
+         jsr   dzx0s_elias
+
+dzx0s_copy
+         clc
+         lda   dst
+         adc   off
+         sta   hl
+         lda   dst+1
+         adc   off+1
+         sta   hl+1
+cop1     lda   (hl), y
+         inc   hl
+         bne   +
+         inc   hl+1
++        jsr   put_byte
+         jsr   decbc
+         bne   cop1
+         asl   tmpa
+         bcc   dzx0s_literals
+
+dzx0s_new_offset
+         ldx   #$fe
+         jsr   dzx0s_elias_loop
+         inx
+;;         beq   exit
+         txa
+         ror
+         sta   off+1
+         jsr   get_byte
+         ror
+         sta   off
+         ldx   #0
+         stx   tmpb
+         inx
+         jsr   dzx0s_elias_skip
+         inx
+         bne   dzx0s_copy
+         inc   tmpb
+         bne   dzx0s_copy ;always
+
+dzx0s_elias_backtrack
+         asl   tmpa
+         txa
+         rol
+         tax
+         rol   tmpb
+         dex
+
+dzx0s_elias
+         inx
+
+dzx0s_elias_loop
+         asl   tmpa
+         bne   dzx0s_elias_skip
+         jsr   get_byte
+         sec
+         rol
+         sta   tmpa
+
+dzx0s_elias_skip
+         bcc   dzx0s_elias_backtrack
+         rts
+
+decbc
+         txa
+         bne   +
+         dec   tmpb
++        dex
+         txa
+         ora   tmpb
+
+dzx0s_elias_return
+         rts
+
+get_byte
+         lda   (src), y
+         inc   src
+         bne   exit
+         inc   src+1
+exit
+         rts
+
+put_byte
+         sta   (dst), y
+         inc   dst
+         bne   +
+         inc   dst+1
++        ldy   size3
+         bne   +
+         dec   size3 + 1
++        dey
+         sty   size3
+         tya
+         ora   size3 + 1
+         bne   +
+         pla
+         pla
+         clc                         ; tell caller file loaded successfully
++        ldy   #0
+         rts
+}
+
+NuFXFindFirst
+; in:    X = refnum of already-open NuFX file
+;        A/Y -> entry buffer (33 bytes)
+; out:   all registers modified
+;        C=1 on EOF
+;        or C=0 and entry buffer populated
+         stx   refnum1
+         stx   refnum2
+         stx   refnum3
+         stx   refnum4
+         stx   refnum5
+         +ST16 src
+         ldy   #0
+         sty   offset
+         sty   offset + 1
+         sty   offset + 2
+         jsr   PRODOS_MLI
+         !byte CMD_SEEK
+         !word ce_parms1
+         lda   #nufx_master_size
+         sta   size1
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word ca_parms1
+         bcs   .find_ret1
+         ldx   #(nufile_id_e - nufile_id) - 1
+-        lda   nufx_readbuff, x
+         cmp   nufile_id, x
+         bne   .find_err1 ; signature mismatch
+         dex
+         bpl   -
+         ldx   #2
+-        lda   nufx_readbuff + nufx_total_recs, x
+         sta   total_records, x
+         dex
+         bpl   -
+         lda   #nufx_local_off
+         sta   offset
+         bne   findnext_i ; always
+
+.find_err1
+         sec
+.find_ret1
+         rts
+
+NuFXFindNext
+; in:    refnum1-4 populated with refnum of already-open NuFX file
+;        |src| -> entry buffer (33 bytes)
+;        (calling NuFXFindFirst does all of that)
+; out:   all registers modified
+;        C=1 on EOF
+;        or C=0 and entry buffer populated
+         lda   nufx_readbuff + nufx_comp_size
+         ldx   nufx_readbuff + nufx_comp_size + 1
+         jsr   add_offset
+
+findnext_i
+         lda   total_records
+         ora   total_records + 1
+         ora   total_records + 2
+         beq   .find_err1
+
+findnext_i2
+         jsr   PRODOS_MLI
+         !byte CMD_SEEK
+         !word ce_parms1
+         lda   #nufx_local_size
+         sta   size1
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word ca_parms1
+         ldx   #(nufx_id_e - nufx_id) - 1
+-        lda   nufx_readbuff, x
+         cmp   nufx_id, x
+         bne   .find_err1 ; signature mismatch
+         dex
+         bpl   -
+         ldy   #2
+-        lda   offset, y
+         sta   nufx_dirbuff + 17, y
+         dey
+         bpl   -
+         lda   nufx_readbuff + nufx_attrib_count
+         ldx   nufx_readbuff + nufx_attrib_count + 1
+         jsr   add_offset
+         jsr   PRODOS_MLI
+         !byte CMD_SEEK
+         !word ce_parms1
+         ; A = 0
+         sta   .comment_low + 1
+         sta   .comment_high + 1
+         lda   nufx_readbuff + nufx_storage_type
+         cmp   #4
+         bcs   .find_err1 ; no support for forked files or subdirectories
+;;         lda   #1         ; only saplings, no seedlings or trees
+         asl
+         asl
+         asl
+         asl
+         sta   nufx_dirbuff
+         lda   nufx_readbuff + nufx_file_type
+         sta   nufx_dirbuff + 16
+         lda   nufx_readbuff + nufx_aux_type
+         sta   nufx_dirbuff + 31
+         lda   nufx_readbuff + nufx_aux_type + 1
+         sta   nufx_dirbuff + 32
+         lda   #nufx_thread_size
+         sta   size1
+         ldx   nufx_readbuff + nufx_threads
+
+.enum_threads
+         jsr   PRODOS_MLI
+         !byte CMD_POS
+         !word ce_parms2
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word ca_parms1
+         lda   nufx_readbuff
+         beq   .check_comment
+         cmp   #nufx_name_thread
+         bne   .check_data
+         lda   nufx_readbuff + nufx_name_off
+         sta   size2
+         ora   nufx_dirbuff
+         sta   nufx_dirbuff
+         lda   nufx_readbuff + nufx_name_max
+         sta   .skip_size + 1
+         bne   .next_thread
+                          ; always
+
+.check_comment
+         ; carry is clear
+         lda   nufx_readbuff + nufx_comp_size
+         adc   .comment_low + 1
+         sta   .comment_low + 1
+         lda   nufx_readbuff + nufx_comp_size + 1
+         adc   .comment_high + 1
+         sta   .comment_high + 1
+         bcc   .next_thread
+                          ; always
+
+.check_data
+         cmp   #nufx_data_thread
+         sec
+         bne   .find_err2
+         lda   nufx_readbuff + nufx_data_format
+!if zx0=1 {
+         beq   +
+         cmp   #nufx_format_zx0
+         sec
+}
+         bne   .find_err2
++        ldy   #2
+-        lda   nufx_readbuff + nufx_data_size, y
+         sta   nufx_dirbuff + 21, y
+         dey
+         bpl   -
+
+.next_thread
+         dex
+         bne   .enum_threads
+         jsr   PRODOS_MLI
+         !byte CMD_POS
+         !word ce_parms1
+
+.skip_size
+         lda   #$d1       ; SMC
+         jsr   add_offset
+
+.comment_low
+         lda   #$d1       ; SMC
+
+.comment_high
+         ldx   #$d1       ; SMC
+         jsr   add_offset
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word ca_parms2
+         ldy   #nufx_dirbuff_size - 1
+-        lda   nufx_dirbuff, y
+         sta   (src), y
+         dey
+         bpl   -
+         lda   total_records
+         bne   +
+         lda   total_records + 1
+         bne   ++
+         dec   total_records + 2
+++       dec   total_records + 1
++        dec   total_records
+
+.find_err2
+         rts
+
+add_offset ;in: X/A to add
+         clc
+         adc   offset
+         sta   offset
+         txa
+         adc   offset+1
+         sta   offset+1
+         bcc   +
+         inc   offset+2
++        rts
+
+!if write=1 {
+checksum
+         lda   #$ff
+         sta   tmpcrc
+         sta   tmpcrc + 1
+         ldx   #>buffer2
+         ldy   #<buffer2
+         jsr   crc
+         sty   nufx_readbuff + nufx_data_crc
+         stx   nufx_readbuff + nufx_data_crc + 1
+         jsr   PRODOS_MLI
+         !byte CMD_SEEK
+         !word ce_parms2
+         jsr   PRODOS_MLI
+         !byte CMD_WRITE
+         !word ca_parms1
+         ldy   #2
+-        lda   nufx_dirbuff + 17, y
+         sta   offset, y
+         dey
+         bpl   -
+         lda   #nufx_comp_size
+         jsr   seekread
+         lda   #nufx_attrib_count
+         jsr   seekread
+         lda   nufx_readbuff + nufx_threads
+         asl
+         asl
+         asl
+         asl
+         adc   nufx_readbuff + nufx_attrib_count
+         ldy   nufx_readbuff + nufx_attrib_count + 1
+         bcc   +
+         iny
++        sec
+         sbc   #nufx_attrib_count    ; minus the bytes read already
+         sta   total_records
+         bcs   +
+         dey
++        sty   total_records + 1
+         inc   tmpcrc
+         inc   tmpcrc + 1
+-        lda   #nufx_dirbuff_size - 1
+         ldy   total_records + 1
+         bne   +
+         cmp   total_records
+         bcc   +
+         lda   total_records
++        sta   size2
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word ca_parms2
+         ldx   #>buffer3
+         ldy   #<buffer3
+         jsr   crc
+         sty   tmpcrc
+         stx   tmpcrc + 1
+         sec
+         lda   total_records
+         sbc   size2
+         sta   total_records
+         bcs   +
+         dec   total_records + 1
++        ora   total_records + 1
+         bne   -
+         sty   nufx_readbuff + nufx_header_crc
+         stx   nufx_readbuff + nufx_header_crc + 1
+         jsr   PRODOS_MLI
+         !byte CMD_SEEK
+         !word ce_parms1
+         jsr   PRODOS_MLI
+         !byte CMD_WRITE
+         !word ca_parms1
+         rts
+}
+
+seekread
+         sta   size1
+         jsr   PRODOS_MLI
+         !byte CMD_SEEK
+         !word ce_parms1
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word ca_parms1
+         rts
+
+!if write=1 {
+tmpcrc   !word 0
+
+crc 
+; in:    X:Y = address of address of data and size to CRC
+; out:   X:Y = crc
+         sty   src
+         stx   src + 1
+         ldx   #2
+         ldy   #0
+-        lda   (src), y
+         sta   .fetch + 1, y
+         iny
+         dex
+         bne   -
+         ldx   #2
+-        lda   (src), y
+         sta   size - 2, y
+         iny
+         dex
+         bne   -
+
+         ldy   tmpcrc
+         ldx   tmpcrc + 1
+-        txa
+.fetch   eor   $d1d1                 ; SMC
+         tax
+         tya
+         eor   crchi, x
+         ldy   crclo, x
+         tax
+         inc   .fetch + 1
+         bne   +
+         inc   .fetch + 2
++        lda   size
+         bne   +
+         dec   size + 1
++        dec   size
+         bne   -
+         lda   size + 1
+         bne   -
+         rts
+
+size     !word 0
+}
+
+ce_parms1
+         !byte 2
+refnum1  !byte $d1        ; refnum
+offset   !byte $d1,$d1,$d1 ; offset
+
+ca_parms1
+         !byte 4
+refnum2  !byte $d1        ; refnum
+buffer1  !word nufx_readbuff   ; buffer
+size1    !word $00d1      ; size
+retsize  !word $d1d1      ; returned size
+
+ca_parms2
+         !byte 4
+refnum3  !byte $d1        ; refnum
+buffer3  !word nufx_dirbuff + 1 ; buffer
+size2    !word $00d1      ; size
+         !word $d1d1      ; returned size
+
+ca_parms3
+         !byte 4
+refnum4  !byte $d1        ; refnum
+buffer2  !word $d1d1      ; buffer
+size3    !word $d1d1      ; size
+         !word $d1d1      ; returned size
+
+ce_parms2
+         !byte 2
+refnum5  !byte $d1        ; refnum
+         !byte $d1,$d1,$d1 ; offset
+
+nufile_id
+         !byte $4E, $F5, $46, $E9, $6C, $E5
+nufile_id_e
+
+nufx_id  !byte $4E, $F5, $46, $D8
+nufx_id_e
+
+total_records
+         !byte 0, 0, 0
+
+!if write=1 {
+crchi    !byte $00, $10, $20, $30, $40, $50, $60, $70, $81, $91, $A1, $B1, $C1, $D1, $E1, $F1
+         !byte $12, $02, $32, $22, $52, $42, $72, $62, $93, $83, $B3, $A3, $D3, $C3, $F3, $E3
+         !byte $24, $34, $04, $14, $64, $74, $44, $54, $A5, $B5, $85, $95, $E5, $F5, $C5, $D5
+         !byte $36, $26, $16, $06, $76, $66, $56, $46, $B7, $A7, $97, $87, $F7, $E7, $D7, $C7
+         !byte $48, $58, $68, $78, $08, $18, $28, $38, $C9, $D9, $E9, $F9, $89, $99, $A9, $B9
+         !byte $5A, $4A, $7A, $6A, $1A, $0A, $3A, $2A, $DB, $CB, $FB, $EB, $9B, $8B, $BB, $AB
+         !byte $6C, $7C, $4C, $5C, $2C, $3C, $0C, $1C, $ED, $FD, $CD, $DD, $AD, $BD, $8D, $9D
+         !byte $7E, $6E, $5E, $4E, $3E, $2E, $1E, $0E, $FF, $EF, $DF, $CF, $BF, $AF, $9F, $8F
+         !byte $91, $81, $B1, $A1, $D1, $C1, $F1, $E1, $10, $00, $30, $20, $50, $40, $70, $60
+         !byte $83, $93, $A3, $B3, $C3, $D3, $E3, $F3, $02, $12, $22, $32, $42, $52, $62, $72
+         !byte $B5, $A5, $95, $85, $F5, $E5, $D5, $C5, $34, $24, $14, $04, $74, $64, $54, $44
+         !byte $A7, $B7, $87, $97, $E7, $F7, $C7, $D7, $26, $36, $06, $16, $66, $76, $46, $56
+         !byte $D9, $C9, $F9, $E9, $99, $89, $B9, $A9, $58, $48, $78, $68, $18, $08, $38, $28
+         !byte $CB, $DB, $EB, $FB, $8B, $9B, $AB, $BB, $4A, $5A, $6A, $7A, $0A, $1A, $2A, $3A
+         !byte $FD, $ED, $DD, $CD, $BD, $AD, $9D, $8D, $7C, $6C, $5C, $4C, $3C, $2C, $1C, $0C
+         !byte $EF, $FF, $CF, $DF, $AF, $BF, $8F, $9F, $6E, $7E, $4E, $5E, $2E, $3E, $0E, $1E
+
+crclo    !byte $00, $21, $42, $63, $84, $A5, $C6, $E7, $08, $29, $4A, $6B, $8C, $AD, $CE, $EF
+         !byte $31, $10, $73, $52, $B5, $94, $F7, $D6, $39, $18, $7B, $5A, $BD, $9C, $FF, $DE
+         !byte $62, $43, $20, $01, $E6, $C7, $A4, $85, $6A, $4B, $28, $09, $EE, $CF, $AC, $8D
+         !byte $53, $72, $11, $30, $D7, $F6, $95, $B4, $5B, $7A, $19, $38, $DF, $FE, $9D, $BC
+         !byte $C4, $E5, $86, $A7, $40, $61, $02, $23, $CC, $ED, $8E, $AF, $48, $69, $0A, $2B
+         !byte $F5, $D4, $B7, $96, $71, $50, $33, $12, $FD, $DC, $BF, $9E, $79, $58, $3B, $1A
+         !byte $A6, $87, $E4, $C5, $22, $03, $60, $41, $AE, $8F, $EC, $CD, $2A, $0B, $68, $49
+         !byte $97, $B6, $D5, $F4, $13, $32, $51, $70, $9F, $BE, $DD, $FC, $1B, $3A, $59, $78
+         !byte $88, $A9, $CA, $EB, $0C, $2D, $4E, $6F, $80, $A1, $C2, $E3, $04, $25, $46, $67
+         !byte $B9, $98, $FB, $DA, $3D, $1C, $7F, $5E, $B1, $90, $F3, $D2, $35, $14, $77, $56
+         !byte $EA, $CB, $A8, $89, $6E, $4F, $2C, $0D, $E2, $C3, $A0, $81, $66, $47, $24, $05
+         !byte $DB, $FA, $99, $B8, $5F, $7E, $1D, $3C, $D3, $F2, $91, $B0, $57, $76, $15, $34
+         !byte $4C, $6D, $0E, $2F, $C8, $E9, $8A, $AB, $44, $65, $06, $27, $C0, $E1, $82, $A3
+         !byte $7D, $5C, $3F, $1E, $F9, $D8, $BB, $9A, $75, $54, $37, $16, $F1, $D0, $B3, $92
+         !byte $2E, $0F, $6C, $4D, $AA, $8B, $E8, $C9, $26, $07, $64, $45, $A2, $83, $E0, $C1
+         !byte $1F, $3E, $5D, $7C, $9B, $BA, $D9, $F8, $17, $36, $55, $74, $93, $B2, $D1, $F0
+}
+
+}

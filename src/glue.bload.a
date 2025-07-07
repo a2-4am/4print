@@ -1,0 +1,247 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - BloadFromFileOnly
+; - BloadFontProps
+; - BloadFont
+; - Bload
+;
+
+!zone {
+
+.parm_get_file_info
+         !byte $A                    ; parm count
+         !word parsed_filename       ; pointer to length-prefixed filename
+         !byte 0                     ; access
+         !byte 0                     ; file type
+.bl_aux_type
+         !word 0                     ; aux type (= load address for binary files)
+         !byte 0                     ; storage type
+         !word 0                     ; blocks used
+         !word 0                     ; last modified date
+         !word 0                     ; last modified time
+         !word 0                     ; creation date
+         !word 0                     ; creation time
+
+.parm_bload_open
+         !byte 3
+.parm_bload_open_name
+         !word parsed_filename
+         !word PRODOS_BUFFER
+.parm_bload_open_refnum
+         !byte SELF_MODIFIED_BYTE
+
+.parm_bload_seek
+         !byte 2
+.parm_bload_seek_refnum
+         !byte SELF_MODIFIED_BYTE
+.parm_bload_seek_offset
+         !word SELF_MODIFIED_WORD
+         !byte 0
+
+.parm_bload_read
+         !byte 4
+.parm_bload_read_refnum
+         !byte SELF_MODIFIED_BYTE
+.parm_bload_read_address
+         !word SELF_MODIFIED_WORD    ; address to store data
+.parm_bload_read_length
+         !word SELF_MODIFIED_WORD    ; length to read, or $FFFF to read entire file
+         !word 0
+
+.parm_bload_close
+         !byte 1
+.parm_bload_close_refnum
+         !byte SELF_MODIFIED_BYTE
+
+BloadFromFileOnly                    ; entry point to read from ProDOS file (skips NuFX processing, assumes D1)
+                                     ; this is a performance optimization for loading the CONFIG file on startup
+         sec
+         php                         ; C=1 on stack -> skip NuFX
+         lda   #$FF
+         bne   .enter_from_fileonly  ; always branches
+
+BloadFontProps                       ; entry point to read first few bytes only
+                                     ; (used after selecting non-built-in font, hence the name)
+         clc
+         php                         ; C=0 on stack -> do not skip NuFX
+         lda   #$02                  ; force font asset type
+         sta   .bl_get_subdirectory_name+1
+         sta   .bl_get_library_name+1
+         lda   #$20
+         sta   .nufx_read_length
+         sta   .parm_bload_read_length
+         lda   #$00
+         beq   .enter_from_fontprops ; always branches
+
+BloadFont                            ; entry point to read entire font file
+         clc
+         php
+         lda   #$02                  ; force font asset type
+         bne   .enter_from_font      ; always branches
+
+Bload                                ; primary entry point to read entire file from NuFX archive or file
+         clc
+         php                         ; C=0 on stack -> do not skip NuFX
+         lda   PS_ASSET_TYPE         ; if D2, use PS_ASSET_TYPE to determine proper subdirectory
+.enter_from_font
+         sta   .bl_get_subdirectory_name+1
+         sta   .bl_get_library_name+1
+         lda   #$FF
+.enter_from_fileonly
+         sta   .nufx_read_length
+         sta   .parm_bload_read_length
+.enter_from_fontprops
+         sta   .nufx_read_length+1
+         sta   .parm_bload_read_length+1
+         stx   zp_array-first_zp+PTR
+         sty   zp_array-first_zp+PTR+1
+         lda   #$00
+         sta   PS_DISK_ERROR
+         jsr   SwapZP
+         jsr   ParsePSFilename
+         +LD16 suffix_address        ; ParsePSFilename will set this to $0000 if no A$ keyword was specified
+         jsr   .set_bload_addresses
+         plp
+         bcs   .skip_nufx            ; depending on C on stack, maybe skip NuFX altogether (set at entry point)
+         lda   suffix_drive          ; ParsePSFilename will set this to $00 if no D keyword was specified
+                                     ; otherwise it will be $01 or $02
+         cmp   #$02
+         beq   .d2
+         ; ',D1' or no D value, so read from NuFX file in root PS directory (saved at program startup)
+         +LDADDR ps_code_library
+         jsr   .bl_open_file
+         bcs   .read_from_file
+         bcc   .read_from_nufx       ; always branches
+.d2      ; ',D2' so read from NuFX file in one of the subdirectories
+         jsr   ToRootDirectory
+         jsr   .bl_get_subdirectory_name
+         jsr   ToSubdirectory
+         jsr   .bl_get_library_name
+         jsr   .bl_open_file
+         bcs   .read_from_file       ; error -> try raw file instead of file-within-NuFX-archive
+.read_from_nufx
+         ; X=refnum of open NuFX file
+         jsr   NuFXReadFile
+         !word parsed_filename       ; filename (ProDOS format)
+.nufx_read_address
+         !word SELF_MODIFIED_WORD    ; target address, or $0000 to use file's default address
+.nufx_read_length
+         !word SELF_MODIFIED_WORD    ; length to read, or $FFFF to read entire file
+         bcc   .bl_cleanup_and_return
+         jsr   PRODOS_MLI
+         !byte CMD_CLOSE
+         !word .parm_bload_close
+.read_from_file
+         ; No luck reading the file from NuFX library, so try an actual ProDOS file.
+         ; We've already changed the ProDOS prefix to the correct subdirectory if necessary,
+         ; so we just need the filename here.
+         ; However, we might still need to look up the default address if ParsePSFilename
+         ; didn't find an A$ keyword
+.skip_nufx
+         ; if A$ keyword is not present, look up default load address for file and use that
+         lda   .parm_bload_read_address
+         ora   .parm_bload_read_address+1
+         bne   +
+         jsr   .use_default_address_for_file
++
+         +LDADDR parsed_filename
+         jsr   .bl_open_file
+
+         ; if O$ keyword was present, use it as an offset into the file and seek there
+         ; (this is used for loading embedded fonts from saved cards)
+         lda   suffix_offset
+         ora   suffix_offset+1
+         beq   +
+         +LD16 suffix_offset
+         +ST16 .parm_bload_seek_offset ; note: only supports lower 2 bytes of file offset
+         jsr   PRODOS_MLI
+         !byte CMD_SEEK
+         !word .parm_bload_seek
++
+         ; if L$ keyword was present, use it as the read length
+         ; (this is used for loading embedded fonts from saved cards)
+         lda   suffix_length
+         ora   suffix_length+1
+         beq   +
+         +LD16 suffix_length
+         +ST16 .parm_bload_read_length
++
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word .parm_bload_read
+         bcc   .bl_cleanup_and_return
+         lda   #$06                  ; file not found
+         sta   PS_DISK_ERROR
+.bl_cleanup_and_return
+         jsr   PRODOS_MLI
+         !byte CMD_CLOSE
+         !word .parm_bload_close
+         lda   suffix_drive
+         cmp   #2
+         bne   +
+         jsr   ToRootDirectory
++        jsr   SwapZP
+         lda   PS_DISK_ERROR
+         rts
+
+.use_default_address_for_file
+         jsr   PRODOS_MLI
+         !byte CMD_GET_FILE_INFO
+         !word .parm_get_file_info
+         +LD16 .bl_aux_type
+.set_bload_addresses
+         +ST16 .nufx_read_address
+         +ST16 .parm_bload_read_address
+         rts
+
+.bl_open_file
+; in:    A/Y -> filename
+; out:   X = refnum
+;        C=1 on error, C=0 on success
+         +ST16 .parm_bload_open_name
+         jsr   PRODOS_MLI
+         !byte CMD_OPEN
+         !word .parm_bload_open
+         bcc   +
+         ldx   #$FF
+         stx   .parm_bload_open_refnum
++        ldx   .parm_bload_open_refnum
+         stx   .parm_bload_read_refnum
+         stx   .parm_bload_seek_refnum
+         stx   .parm_bload_close_refnum
+         rts
+
+.bl_get_subdirectory_name
+         ldx   #SELF_MODIFIED_BYTE              ; SMC by entry points
+         bmi   .bl_get_font_subdir
+         cpx   #PS_ASSET_FONT
+         beq   .bl_get_font_subdir
+         stx   .blgsnx
+         jsr   LibraryIsDirectory
+         beq   .bl_force_saved_dir
+.blgsnx=*+1
+         ldx   #SELF_MODIFIED_BYTE
+         lda   dir_ptr_lo, x
+         ldy   dir_ptr_hi, x
+         rts
+.bl_get_font_subdir
+         lda   suffix_offset
+         ora   suffix_offset+1
+         bne   .bl_force_saved_dir
+         +LDADDR dir_fonts
+         rts
+.bl_force_saved_dir
+         +LDADDR dir_saved
+         rts
+
+.bl_get_library_name
+         ldx   #SELF_MODIFIED_BYTE              ; SMC by entry points
+         bmi   +
+         lda   current_library_ptr_lo, x
+         ldy   current_library_ptr_hi, x
+         rts
++        jmp   GetSelectedFontLibrary
+
+}

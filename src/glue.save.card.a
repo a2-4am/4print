@@ -1,0 +1,243 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - SaveCard
+;
+
+!zone {
+
+.parm_save_card_open
+         !byte 3
+.parm_save_card_open_name
+         !word parsed_filename
+         !word output_buffer         ; LoadFont will use PRODOS_BUFFER if we call it
+.parm_save_card_open_refnum
+         !byte SELF_MODIFIED_BYTE
+
+.parm_save_card_write
+         !byte 4
+.parm_save_card_write_refnum
+         !byte SELF_MODIFIED_BYTE
+.parm_save_card_write_address
+         !word SELF_MODIFIED_WORD
+.parm_save_card_write_length
+         !word SELF_MODIFIED_WORD
+         !word 0
+
+.parm_save_card_destroy
+         !byte 1
+.parm_save_card_destroy_name
+         !word parsed_filename
+
+.parm_save_card_create
+         !byte 7
+         !word parsed_filename
+         !byte $C3
+         !byte $06
+         !word $1800
+         !byte $01
+         !word $0000
+         !word $0000
+
+.reload
+         !raw  "MENULIB,D1"
+.need_reload
+         !byte SELF_MODIFIED_BYTE
+
+SaveCard
+; called from $114B via jump table
+; near the end of a lightly patched save routine
+; user has entered a filename, original PS code has constructed a
+; BSAVE string from it and has gotten user consent to overwrite
+; any existing file
+; in:    X/Y -> BSAVE string
+; out:   A and PS_DISK_ERROR contain PS error code (0=success)
+         stx   zp_array-first_zp+PTR
+         sty   zp_array-first_zp+PTR+1
+         jsr   SwapZP
+         jsr   ParsePSFilename
+         +LDADDR dir_saved
+         jsr   ToSubdirectory
+         lda   #1
+         sta   .need_reload
+
+         ; destroy existing file if any, ignore errors
+         jsr   PRODOS_MLI
+         !byte CMD_DESTROY
+         !word .parm_save_card_destroy
+
+         ; create file anew
+         jsr   PRODOS_MLI
+         !byte CMD_CREATE
+         !word .parm_save_card_create
+         bcc   +
+         jmp   .save_card_error
++
+         jsr   PRODOS_MLI
+         !byte CMD_OPEN
+         !word .parm_save_card_open
+         bcc   +
+         jmp   .save_card_error
++
+         lda   .parm_save_card_open_refnum
+         sta   .parm_save_card_write_refnum
+
+         +LDADDR PS_CARD_DATA
+         +ST16 .parm_save_card_write_address
+         +LDADDR $0500
+         +ST16 .parm_save_card_write_length
+         jsr   PRODOS_MLI
+         !byte CMD_WRITE
+         !word .parm_save_card_write
+         bcc   +
+         jmp   .save_card_error
++
+         lda   PS_MAIN_TYPE
+         cmp   #PS_MAIN_TYPE_LETTERHEAD
+         bne   +
+         +LDADDR PS_INSIDE_GFX_DATA  ; letterhead has front and inside graphics IDs swapped
+         jmp   ++
++        +LDADDR PS_FRONT_GFX_DATA
+++       ldx   PS_FRONT_GFX_ID
+         jsr   .maybe_save_gfx
+         bcs   .save_card_error
+
+         lda   PS_MAIN_TYPE
+         cmp   #PS_MAIN_TYPE_LETTERHEAD
+         bne   +
+         +LDADDR PS_FRONT_GFX_DATA   ; letterhead has front and inside graphics IDs swapped
+         jmp   ++
++        +LDADDR PS_INSIDE_GFX_DATA
+++       ldx   PS_INSIDE_GFX_ID
+         jsr   .maybe_save_gfx
+         bcs   .save_card_error
+
+         lda   PS_MAIN_TYPE
+         cmp   #PS_MAIN_TYPE_SIGN
+         beq   +
+         lda   PS_INSIDE_FONT_ID     ; cards and letterhead have front and inside font IDs swapped
+         jmp   ++
++        lda   PS_FRONT_FONT_ID
+++       ldx   #PS_FRONT
+         stx   PS_FRONT_OR_INSIDE
+         jsr   .maybe_save_font
+         bcs   .save_card_error
+
+         lda   PS_MAIN_TYPE
+         cmp   #PS_MAIN_TYPE_SIGN
+         beq   +
+         lda   PS_FRONT_FONT_ID      ; cards and letterhead have front and inside font IDs swapped
+         jmp   ++
++        lda   PS_INSIDE_FONT_ID
+++       ldx   #PS_INSIDE
+         stx   PS_FRONT_OR_INSIDE
+         jsr   .maybe_save_font
+         bcs   .save_card_error
+
+         lda   PS_MAIN_TYPE
+         cmp   #PS_MAIN_TYPE_LETTERHEAD
+         beq   .save_card_success    ; letterhead does not have borders, so we're done
+
+         +LDADDR FRONT_BORDER_DATA
+         ldx   PS_FRONT_BORDER_ID
+         jsr   .maybe_save_border
+         bcs   .save_card_error
+
+         +LDADDR INSIDE_BORDER_DATA
+         ldx   PS_INSIDE_BORDER_ID
+         jsr   .maybe_save_border
+
+.save_card_error
+; in:    C=0 if success
+;        C=1 if error and A = MLI return code
+         bcc   .save_card_success
+         cmp   #MLI_WRITE_PROTECTED
+         beq   .save_card_write_protected
+         cmp   #MLI_DISK_FULL
+         beq   .save_card_disk_full
+         cmp   #MLI_DUPLICATE_FILE
+         beq   .save_card_file_locked
+.save_card_io_error
+         lda   #PS_ERR_IO_ERROR
+         +HIDE_NEXT_2_BYTES
+.save_card_write_protected
+         lda   #PS_ERR_WRITE_PROTECTED
+         +HIDE_NEXT_2_BYTES
+.save_card_disk_full
+         lda   #PS_ERR_DISK_FULL
+         +HIDE_NEXT_2_BYTES
+.save_card_file_locked
+         lda   #PS_ERR_FILE_LOCKED
+         +HIDE_NEXT_2_BYTES
+.save_card_success
+         lda   #PS_ERR_NONE
+         tax
+         php
+         pha
+         jsr   CloseAllFiles
+         jsr   ToRootDirectory
+         jsr   SwapZP
+         lda   .need_reload
+         bne   +
+         ldx   #<.reload
+         ldy   #>.reload
+         jsr   Bload
++        pla
+         sta   PS_DISK_ERROR
+         plp
+         rts
+
+.maybe_save_gfx
+; in:    X = GFX ID
+;        A/Y -> load address
+; out:   C=0 if success
+;        C=1 if error and A = MLI return code
+         cpx   #PS_HAS_EXT_GFX
+         bne   .do_nothing_and_be_happy_about_it
+         ldx   #$40
+         stx   .parm_save_card_write_length
+         ldx   #$02
+         bne   .save_ext             ; always branches
+.maybe_save_font
+; in:    A = font ID
+; out:   C=0 if success
+;        C=1 if error and A = MLI return code
+;        exits via .subsave_check_error
+         cmp   #PS_HAS_EXT_FONT
+         bne   .do_nothing_and_be_happy_about_it
+         jsr   SwapZP
+         jsr   LoadFont
+         jsr   SwapZP
+         jsr   save_restore_5ff4
+         ldx   #$00
+         stx   .need_reload
+         stx   .parm_save_card_write_length
+         ldx   #$18
+         +LDADDR $5FF4
+         bne   .save_ext             ; always branches
+.maybe_save_border
+; in:    X = border ID
+;        A/Y -> load address
+; out:   C=0 if success
+;        C=1 if error and A = MLI return code
+         cpx   #PS_HAS_EXT_BORDER
+         bne   .do_nothing_and_be_happy_about_it
+         ldx   #$00
+         stx   .parm_save_card_write_length
+         inx
+.save_ext
+         stx   .parm_save_card_write_length+1
+         +ST16 .parm_save_card_write_address
+         jsr   PRODOS_MLI
+         !byte CMD_WRITE
+         !word .parm_save_card_write
+         rts
+
+.do_nothing_and_be_happy_about_it
+         clc
+         rts
+
+         rts
+
+}

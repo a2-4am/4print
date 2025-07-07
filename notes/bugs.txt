@@ -1,0 +1,22 @@
+remaining major bugs
+- loading border files from SAVED.CREATIONS/ fails because we don't have a reusable display name -> filename function
+
+* [fixed] loading greeting card/sign/letterhead from disk gets as far as selecting file then doesn't work
+* [fixed] letterhead does not load external fonts properly
+  oh they're swapped why God why
+* [fixed][regression] greeting card front border is always blank (new or saved cards)
+  because it's using $BB00 as scratch space and that's now where front border lives
+  so we need to move the scratch space to $BC00
+* [fixed] save card/sign/letterhead with custom fonts or borders doesn't work (they're embedded)
+* [fixed] no way to access saved graphics or screens (enumeration only includes NuFX archives, not files in SAVED/)
+* [fixed] Screen Magic -> save screen -> <Return> to see choices -> none found -> returns to Screen Magic menu
+  - ah, it is in fact getting the filename MENULIB and saving the file as that, then returning 'successfully'
+    to Screen Magic, so fixing that return code will probably stop the unwanted file save
+  - ah, need to check if PS_PAGES==0 after PS_SELECT_ENUMERATED
+* [fixed] graphics selection live preview logic fails if there's only 1 page of graphics (possible if browsing SAVED.CREATIONS/)
+
+future enhancements
+- rewrite enumeration/paging so we only enumerate one page of assets at a time
+  (this will save $500 bytes for output_buffer and $180 bytes for page offset tables)
+  (also much faster to show first page of assets)
+- live preview during external font selection

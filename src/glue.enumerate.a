@@ -1,0 +1,228 @@
+license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - EnumerateNuFX
+; - EnumerateDirectory
+;
+
+!zone {
+
+.parm_enum_open
+         !byte 3
+.parm_enum_open_name
+         !word SELF_MODIFIED_WORD
+         !word PRODOS_BUFFER
+parm_enum_open_refnum
+         !byte 0
+
+.parm_enum_read
+         !byte 4
+.parm_enum_read_refnum
+         !byte SELF_MODIFIED_BYTE
+         !word DIR_BUFFER
+         !word $200
+         !word 0
+
+EnumerateNuFX
+; in:    A/Y -> output buffer
+;        X = items per page
+; out:   output buffer populated with PS-style menu list
+;        |PS_INDEX_IN_PAGE|, |PS_PAGES|, |PS_ITEMS| populated
+;        all flags and registers clobbered
+         stx   .enum_items_per_page
+         ldx   PS_ASSET_TYPE
+         jsr   .enum_init
+         jsr   SwapZP
+         jsr   .enum_open_nufx_file
+         bcs   .enum_done
+         +LDADDR DIR_BUFFER
+         +ST16 entry_ptr
+         jsr   NuFXFindFirst
+         bcs   .enum_done
+.check_nufx_entry                    ; check one file entry to see if it's a file we care about
+         ; potential optimization - since all the NuFX archives we ship are already segmented by asset type,
+         ; we could just skip the Is check and assume that every file is relevant
+         jsr   Is                    ; routes to one of the .is_* functions, depending on asset type
+         bne   .next_nufx_entry      ; .is_* function said no -> skip
+         jsr   .enum_output_filename ; convert filename to display name and add it to the output buffer
+         ldy   #kEnumNuFXOffset
+         ldx   PS_ITEMS
+         lda   (entry_ptr), y
+         sta   enum_nufx_offset_cache_lo, x
+         iny
+         lda   (entry_ptr), y
+         sta   enum_nufx_offset_cache_hi, x
+         iny
+         lda   (entry_ptr), y
+         sta   enum_nufx_offset_cache_very_hi, x
+         jsr   .enum_inc             ; increment item and page counts, update page-start tables
+.next_nufx_entry                     ; move to next entry in the archive
+         jsr   NuFXFindNext
+         bcc   .check_nufx_entry
+.enum_done
+         lda   #$FF
+         jsr   .enum_output
+         jsr   CloseAllFiles
+         jsr   ToRootDirectory
+         jmp   SwapZP
+
+EnumerateDirectory
+; in:    A/Y -> output buffer
+;        X = PS asset type (see list in constants.a)
+;            or $07 for NuFX files (used to change library)
+; out:   output buffer populated with PS-style menu list
+;        |PS_INDEX_IN_PAGE|, |PS_PAGES|, |PS_ITEMS| populated
+;        all flags and registers clobbered
+         jsr   .enum_init
+         jsr   SwapZP
+
+         jsr   PRODOS_MLI            ; open and read the subdirectory
+         !byte CMD_OPEN
+         !word .parm_enum_open
+         bcs   .enum_done
+         lda   parm_enum_open_refnum
+         sta   .parm_enum_read_refnum
+         jsr   PRODOS_MLI
+         !byte CMD_READ
+         !word .parm_enum_read
+         bcs   .enum_done
+         lda   DIR_BUFFER + kVolDirHeaderEntryLength
+         sta   entry_length
+         lda   DIR_BUFFER + kVolDirHeaderEntriesPerBlock
+         sta   .entries_per_block
+         sta   entries_remaining_in_block
+         +LDADDR DIR_BUFFER + kVolDirHeaderSizeof
+         +ST16 entry_ptr
+
+.check_entry                         ; check one file entry to see if it's a file we care about
+         ldy   #kFileEntryStorageType
+         lda   (entry_ptr), y
+         and   #$30
+         beq   .next_entry           ; entry is inactive or not a file -> always skip
+         jsr   Is                    ; routes to one of the .is_* functions, depending on asset type
+         bne   .next_entry           ; .is_* function said no -> skip
+         jsr   .enum_output_filename ; convert filename to display name and add it to the output buffer
+         jsr   .enum_inc             ; increment item and page counts, update page-start tables
+
+.next_entry                          ; move to next file entry in this block
+         lda   entry_ptr
+         clc
+         adc   entry_length
+         sta   entry_ptr
+         bcc   +
+         inc   entry_ptr+1
++        dec   entries_remaining_in_block
+         bne   .check_entry
+
+         jsr   PRODOS_MLI            ; read next directory block
+         !byte CMD_READ
+         !word .parm_enum_read
+         bcs   .enum_done
+         +LDADDR DIR_BUFFER + 4
+         +ST16 entry_ptr
+.entries_per_block=*+1
+         lda   #SELF_MODIFIED_BYTE
+         sta   entries_remaining_in_block
+         bne   .check_entry          ; always branches
+
+.enum_init
+         +ST16 .enum_output_buffer   ; initialize output buffering
+         sta   PS_PAGE_START_LO      ; initialize PS page-start cache
+         sty   PS_PAGE_START_HI
+         jsr   SetIsFunction         ; clobbers A,Y but preserves X
+         lda   #$00                  ; initialize PS variables
+         sta   PS_INDEX_IN_PAGE
+         sta   PS_PAGES
+         sta   PS_ITEMS
+         sta   .enum_skip_chars
+         cpx   #asset_nufx
+         beq   .enum_init_notsave
+         txa
+         php
+         and   #$7F
+         tax
+         cpx   #PS_ASSET_FONT
+         bcc   +
+         lda   #$05                  ; fonts, borders, and saved cards/signs/letterhead
+         sta   .enum_skip_chars      ; have a 4-character-plus-period prefix
++        plp
+         bmi   .enum_init_force_save ; if X bit 7=1 then force SAVED.CREATIONS/ directory
+         jsr   CanSelectLibrary
+         bcs   .enum_init_force_save
+.enum_init_notsave
+         ldx   PS_ASSET_TYPE         ; stop deleting this line
+                                     ; if X=7 on entry then X!=PS_ASSET_TYPE now
+                                     ; and we really really want X=PS_ASSET_TYPE now
+         lda   dir_ptr_lo, x
+         ldy   dir_ptr_hi, x
+         bne   +                     ; always branches
+.enum_init_force_save
+         +LDADDR dir_saved
++        +ST16 .parm_enum_open_name
+         rts
+
+.enum_open_nufx_file
+         +LD16 .parm_enum_open_name
+         jsr   ToSubdirectory
+         ldx   PS_ASSET_TYPE
+         lda   current_library_ptr_lo, x
+         ldy   current_library_ptr_hi, x
+         +ST16 .parm_enum_open_name
+         jsr   PRODOS_MLI
+         !byte CMD_OPEN
+         !word .parm_enum_open
+         ldx   parm_enum_open_refnum
+         rts
+
+.enum_inc                            ; increment relevant counts after adding a new menu item
+         inc   PS_ITEMS              ; inc total item count
+         inc   PS_INDEX_IN_PAGE
+         lda   PS_INDEX_IN_PAGE
+.enum_items_per_page=*+1
+         eor   #SELF_MODIFIED_BYTE
+         bne   .enum_inc_done        ; page not full -> done
+         ; prepare for new page
+         sta   PS_INDEX_IN_PAGE      ; A=0
+         lda   #$FF                  ; output end-of-page delimiter
+         jsr   .enum_output
+         inc   PS_PAGES              ; inc page count
+         ldx   PS_PAGES
+         lda   .enum_output_buffer   ; update page-start-address tables with new page
+         sta   PS_PAGE_START_LO, x
+         lda   .enum_output_buffer+1
+         sta   PS_PAGE_START_HI, x
+.enum_inc_done
+         rts
+
+.enum_output_filename
+; in:    entry_ptr -> ProDOS file entry
+;        caller has set |.enum_output_buffer| and
+;          |.enum_skip_chars| for number of characters to skip from beginning of name
+         ldy   #$00
+         lda   (entry_ptr), y
+         and   #$0F
+         sta   .enum_output_len
+.enum_skip_chars=*+1
+         ldy   #SELF_MODIFIED_BYTE
+-        iny
+         lda   (entry_ptr), y
+         jsr   .enum_output
+.enum_output_len=*+1
+         cpy   #SELF_MODIFIED_BYTE
+         bcc   -
+         lda   #$00                  ; output end-of-item delimiter
+         ; /!\ execution falls through here
+.enum_output
+         cmp   #$2E                  ; convert periods to spaces
+         bne   +
+         lda   #$20
++
+.enum_output_buffer=*+1
+         sta   SELF_MODIFIED_WORD
+         inc   .enum_output_buffer
+         bne   +
+         inc   .enum_output_buffer+1
++        rts
+
+}

@@ -1,0 +1,322 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - InitializeDataDisk
+; - FromOtherDisk
+; - FromOtherDiskSeeChoices
+;
+
+fod_mode
+         !byte 0                     ; 0=load, 1=save
+
+!zone {
+
+; Each of these is the last part of the menu parms + all of the menu list.
+; We copy the appropriate one into place then call the (slightly patched)
+; original PS code to display the menu. PS code handles adding the
+; 'see more choices' item, paging between multiple menu pages (including
+; final page that might be shorter), and wrapping back around to the
+; first page again.
+.fod_menu_parms
+         !word PS_FOD_ONSELECTIONCHANGE
+         !byte $0A,$14,$27,$02,$00,$4E,$00,$30,$00,$00,$02,$00
+.fod_menu_parms_gfx
+         !word .fod_gfx_onchange
+         !byte $02,$13,$3B,$02,$00,$18,$00,$44,$00,$00,$02,$00
+.fod_menu_parms_bord
+         !word .fod_bord_onchange
+         !byte $0A,$14,$31,$02,$00,$4E,$00,$3A,$00,$00,$02,$00
+
+.parm_fod_open
+         !byte 3
+.parm_fod_open_name
+         !word SELF_MODIFIED_WORD
+         !word PRODOS_BUFFER
+.parm_fod_open_refnum
+         !byte SELF_MODIFIED_BYTE
+
+.fod_items_per_page_table            ; indexed by asset type
+         !byte 10                    ; 0=graphics
+         !byte 13                    ; 1=screen
+         !byte 13                    ; 2=font
+         !byte 10                    ; 3=border
+         !byte 13                    ; 4=saved card
+         !byte 13                    ; 5=saved sign
+         !byte 13                    ; 6=saved letterhead
+
+.fod_bload_suffix
+         !raw  ",A$BC00,D2",0        ; GFX_BUFFER
+
+InitializeDataDisk
+; Original PS code handles asking user if they need to initialize a data disk
+; before saving a file.
+; Since all save flows call this, we override it completely to instead
+; set a flag for the 'from other disk' code to tell it that we're entering
+; a save flow so it can make the necessary UI/logic adjustments.
+; called from $9600 via jump table
+; output:      A=1 to match original code
+         lda   #1                    ; set 'save' flag
+         sta   fod_mode
+         rts
+
+FromOtherDisk
+; 'from other disk' (now 'from PS library') main entry point
+; allows text input to enter filename, or press Return to
+; see choices (hooked to FromOtherDiskSeeChoices)
+; jumped to from $7205 via jump table
+         jsr   $72EE
+         php
+         pha
+         lda   #0                    ; reset 'save' flag
+         sta   fod_mode
+         pla
+         plp
+         rts
+
+FromOtherDiskSeeChoices
+; Enumerate available assets from a library and allow user to select one.
+; Triggered by pressing Return with no filename at the
+; 'from other disk' (now 'from PS library') screen.
+; This routine may be called while loading or saving any asset type, both
+; built-in assets and user-saved creations.
+; All built-in assets are stored within NuFX archives, segmented into
+; type-specific subdirectories.
+; If saving (gfx from editor / screen from Screen Magic / saved card / saved sign / saved letterhead)
+;   OR
+; if loading a built-in type whose current library is 'SAVED.CREATIONS' [note this includes all 'save' types]
+;   then use the SAVED.CREATIONS/ subdirectory and enumerate files within it.
+; If loading a built-in type (gfx / screen / font / border), use
+;   dir_ptr_lo/hi (indexed by PS_ASSET_TYPE) to find the proper subdirectory,
+;   then use current_library_ptr_lo/hi (also indexed by PS_ASSET_TYPE)
+;   to find the proper NuFX archive and enumerate records within it.
+; jumped to from $790F via jump table
+; original routine is at $7F6A and we patch it and call part of it
+; in:    none
+; out:   C=0 if we selected an asset
+;        C=1 if we didn't (e.g. pressed Esc, or there were no assets to choose)
+         ldx   PS_ASSET_TYPE
+         lda   .fod_items_per_page_table, x
+         sta   .fod_items_per_page
+         sta   $8082
+         sta   $809E
+         jsr   CanSelectLibrary
+         bcs   .fod_enum_dir
+         ldx   PS_ASSET_TYPE
+         jsr   LibraryIsDirectory
+         beq   .fod_enum_dir
+         ; enumerate records in NuFX archive
+         ; then reopen the archive to prepare for live previews
+         +LDADDR output_buffer
+         ldx   .fod_items_per_page
+         jsr   EnumerateNuFX
+         jsr   SwapZP
+         ldx   PS_ASSET_TYPE
+         lda   dir_ptr_lo, x
+         ldy   dir_ptr_hi, x
+         jsr   ToSubdirectory
+         ldx   PS_ASSET_TYPE
+         lda   current_library_ptr_lo, x
+         ldy   current_library_ptr_hi, x
+         +ST16 .parm_fod_open_name
+         jsr   PRODOS_MLI
+         !byte CMD_OPEN
+         !word .parm_fod_open
+         lda   #$2C
+         jmp   .fod_post_enum
+
+.fod_enum_dir
+         ; enumerate files in SAVED.CREATIONS/ subdirectory
+         ; then switch to that subdirectory to prepare for live previews
+         lda   PS_ASSET_TYPE
+         ora   #$80
+         tax
+         +LDADDR output_buffer
+         jsr   EnumerateDirectory
+         jsr   SwapZP
+         +LDADDR dir_saved
+         jsr   ToSubdirectory
+         lda   #$4C
+         ; execution falls through here to .fod_post_enum
+
+.fod_post_enum
+         sta   .read_asset_dir_jump
+         ; set up type-specific live previews, if any
+         ldx   #$0D
+         lda   PS_ASSET_TYPE
+         beq   .fod_gfx
+         cmp   #PS_ASSET_BORDER
+         beq   .ford_bord
+.fod_standard
+         lda   .fod_menu_parms, x
+         sta   PS_FOD_MENU_PARMS, x
+         dex
+         bpl   .fod_standard
+         ldy   #$28                  ; vertical offset for 'see more choices'
+         ldx   #$4A                  ; horizontal offset for 'see more choices'
+         bne   .fod_common           ; always branches
+.fod_gfx
+         lda   .fod_menu_parms_gfx, x
+         sta   PS_FOD_MENU_PARMS, x
+         dex
+         bpl   .fod_gfx
+         ldy   #$3C                  ; vertical offset for 'see more choices'
+         ldx   #$10                  ; horizontal offset for 'see more choices'
+         bne   .fod_common           ; always branches
+.ford_bord
+         lda   .fod_menu_parms_bord, x
+         sta   PS_FOD_MENU_PARMS, x
+         dex
+         bpl   .ford_bord
+         ldy   #$32                  ; vertical offset for 'see more choices'
+         ldx   #$4A                  ; horizontal offset for 'see more choices'
+.fod_common
+         sty   $8143
+         stx   $81C4
+         ; call patched routine with custom menu parms
+         ; (may call one of the *_onchange routines below to handle live previews)
+         jsr   PS_SELECT_ENUMERATED
+         jsr   CloseAllFiles
+         jsr   ToRootDirectory
+         jsr   SwapZP
+         lda   PS_ITEMS
+         beq   .fod_error
+         lda   PS_MENUKEY
+         cmp   #$0E                  ; C=0 if pressed <Return>, C=1 if pressed <Esc>
+         rts
+.fod_error
+         sec
+         rts
+
+.fod_bord_onchange
+         ldx   PS_MENU_CURRENT
+         lda   PS_PAGES              ; if only 1 page, every menu item is a border
+         beq   .fod_read_border
+         cpx   PS_MENU_ITEMS         ; otherwise last item is 'see more' and we need to clear the border data
+         beq   .fod_no_border
+.fod_read_border
+         jsr   .read_asset_at
+.fod_draw_border
+         jsr   MINITURE
+         jmp   PS_FOD_ONSELECTIONCHANGE
+.fod_no_border
+         ldx   #$94
+         lda   #$00
+-        sta   GFX_BUFFER-1, x
+         dex
+         bne   -
+         beq   .fod_draw_border      ; always branches
+
+.fod_gfx_onchange
+         lda   #$17
+         sta   PS_LEFT
+         lda   #$0E
+         sta   PS_WIDTH
+         lda   #$50
+         sta   PS_TOP
+         lda   #$3C
+         sta   PS_HEIGHT
+         ldy   #$7F                  ; background color
+         lda   #$03                  ; fill-with-background
+         jsr   PS_FILL_RECT
+
+         ldx   PS_PAGES
+         beq   +
+         ldx   PS_MENU_CURRENT       ; current menu item
+         cpx   PS_MENU_ITEMS         ; number of menu items
+         bne   +
+         jmp   PS_TO_SEE_MORE_CHOICES ; display 'press return to see more choices' text
++        ldx   PS_MENU_CURRENT
+         jsr   .read_asset_at
+
+         +LDADDR GFX_BUFFER
+         sta   PS_DISPLAY_GFX_SRC_LO ; cargo-culted from built-in 'by picture' code
+         sty   PS_DISPLAY_GFX_SRC_HI
+         ldx   #$57
+         ldy   #$77
+         jsr   PS_DISPLAY_GFX
+
+         jmp   PS_FOD_ONSELECTIONCHANGE
+
+.read_asset_at
+; in:    X = current menu item (from PS_MENU_CURRENT)
+;        |PS_PAGE| is set
+         dex
+         txa
+         ; A=selected menu item (0-based)
+         ; find NuFX offset
+         ldx   PS_PAGE               ; current page (0-based)
+         beq   +
+-        clc
+.fod_items_per_page=*+1
+         adc   #SELF_MODIFIED_BYTE
+         dex
+         bne   -
++        tax
+.read_asset_dir_jump
+         bit   .read_asset_from_dir  ; SMC opcode to JMP
+
+         ; read file out of NuFX archive
+         ; for performance, we populated a cache of the file offsets of each record
+         ; during enumeration, and we now use that offset to find the record we want
+         ; to read
+         ; the NuFX file itself is already open, saving additional time
+         lda   enum_nufx_offset_cache_lo, x
+         sta   .nufx_offset_lo
+         lda   enum_nufx_offset_cache_hi, x
+         sta   .nufx_offset_hi
+         lda   enum_nufx_offset_cache_very_hi, x
+         sta   .nufx_offset_very_hi
+
+         ldx   .parm_fod_open_refnum
+         jsr   NuFXReadFileAt
+.nufx_offset_lo
+         !byte SELF_MODIFIED_BYTE
+.nufx_offset_hi
+         !byte SELF_MODIFIED_BYTE
+.nufx_offset_very_hi
+         !byte SELF_MODIFIED_BYTE
+         !word GFX_BUFFER            ; address to store data
+         !word $FFFF                 ; read entire file
+         rts
+
+.read_asset_from_dir
+         ; X=item number in entire menu list (0-based)
+         ; loop through menu list to find the display name
+         +LDADDR output_buffer
+         +ST16 .get_char_and_inc+1
+         ldy   #0
+         txa
+         beq   +
+-        jsr   .get_char_and_inc
+         bne   -
+         dex
+         bne   -
+         ;TODO this is wrong for borders, need generalized display name -> filename function
++        ldx   #0
+-        jsr   .get_char_and_inc
+         beq   +
+         sta   $9190, x
+         inx
+         bne   -
++        ldy   #0
+-        lda   .fod_bload_suffix, y
+         sta   $9190, x
+         beq   +
+         iny
+         inx
+         bne   -
++        jsr   SwapZP
+         ldx   #$90
+         ldy   #$91
+         jsr   Bload
+         jmp   SwapZP
+
+.get_char_and_inc
+         lda   SELF_MODIFIED_WORD, y
+         iny
+         bne   +
+         inc   .get_char_and_inc+2
++        cmp   #0
+         rts
+}

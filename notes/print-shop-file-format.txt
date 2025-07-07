@@ -1,0 +1,46 @@
+The Print Shop Color, 1986, Apple II
+file format notes for saved greeting cards, signs, and letterhead
+last updated 2025-07 by 4am
+
+file format for saved cards, signs, and letterhead seems identical BUT ISN'T, QUITE
+
+first $0500 bytes contains selected choices, options, and all entered text
+  is a memory dump copied from $8300..$87FF
+
+file offsets +$02C0..+$02C2 (from addresses $85C0..$85C2) contain info for front assets
+  +$02C0 front font     $01..$08 = built-in font, $09 = external font, $0A = no font
+  +$02C1 front border   $01..$09 = built-in border, $0A = external border, $0B = no border
+  +$02C2 front graphic  $00+ = built-in graphic, $FF = external graphic
+
+file offsets +$04C0..+$04C2 (from addresses $87C0..$87C2) contain info for inside assets
+  +$04C0 inside font    idem. $85C0
+  +$04C1 inside border  idem. $85C1
+  +$04C2 inside graphic idem. $85C2
+
+if +$02C2 == 0xFF (front graphic is external*),  next $0240 file bytes are front graphic data
+if +$04C2 == 0xFF (inside graphic is external*), next $0240 file bytes are inside graphic data
+
+  (*) EXCEPT letterhead swaps these flags, so +$04C2 is the flag for whether the *front*
+  graphic is external, and +$02C2 is the flag for whether the *inside* graphic is external.
+  The order of the actual graphics data is the same in all cases --
+  front graphic first (if any), then inside graphic (if any).
+
+if +$02C0 == 0x09 (front font is external**),   next $1800 file bytes are front font data
+if +$04C0 == 0x09 (inside font is external**),  next $1800 file bytes are inside font data
+  (note fonts are variable length but always stored as $1800 bytes, remainder is junk/ignored)
+
+  (**) EXCEPT cards and letterhead swap these flags, so +$04C0 is the flag for whether the *front*
+  font is external, and +$02C0 is the flag for whether the *inside* font is external.
+  The order of the actual font data is the same in all cases --
+  front font first (if any), then inside font (if any).
+
+if $95F5 == 0x03 (file type is "letterhead") then ignore borders; letterhead doesn't have borders
+
+if +$02C1 == 0x0A (front border is external),   next $0100 file bytes are front border data
+if +$04C1 == 0x0A (inside border is external),  next $0100 file bytes are inside border data
+  (note borders are $90 bytes each but always stored as $0100 bytes, remainder is junk/ignored)
+
+final note (applies to all save files):
+- if the high byte of the final file size is 0x1F or 0x20, change the high byte to 0x21
+  because PS logic for 'is this a saved screen' is whether the sector size is 0x1F or 0x20,
+  so this final hack guarantees that save files are not misidentified as screens

@@ -1,0 +1,136 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - SetIsFunction
+; - Is
+
+!zone {
+
+; note:  $7912 contains asset type
+;          $00 - graphic (4 sectors)
+;          $01 - screen (33 or 34 sectors (decimal))
+;          $02 - font (FONT.*)
+;          $03 - border (BORD.*)
+;          $04 - saved greeting card (CARD.*)
+;          $05 - saved sign (SIGN.*)
+;          $06 - saved letterhead (LETT.*)
+; note:  $8184 contains non-delimited array of 4-character prefixes for asset types $02-$06
+;          'FONTBORDCARDSIGNLETT'
+
+.is_lo
+         !byte <.is_ps_graphic
+         !byte <.is_ps_screen
+         !byte <.is_ps_font
+         !byte <.is_ps_border
+         !byte <.is_ps_greeting_card
+         !byte <.is_ps_sign
+         !byte <.is_ps_letterhead
+         !byte <.is_nufx_archive
+.is_hi
+         !byte >.is_ps_graphic
+         !byte >.is_ps_screen
+         !byte >.is_ps_font
+         !byte >.is_ps_border
+         !byte >.is_ps_greeting_card
+         !byte >.is_ps_sign
+         !byte >.is_ps_letterhead
+         !byte >.is_nufx_archive
+
+SetIsFunction
+; initialize |Is| to point to proper .is_* function
+; in:    X = asset type
+; out:   A,Y clobbered
+;        X preserved
+         txa
+         pha
+         and   #$7F
+         tax
+         lda   .is_lo, x
+         ldy   .is_hi, x
+         +ST16 Is+1
+         pla
+         tax
+         rts
+
+Is
+; .is_* functions check the current file for certain conditions
+; in:    caller has called SetIsFunction to set Is+1 and Is+2
+;          to the correct .is_* function based on asset type
+;        entry_ptr -> ProDOS-style file entry
+; out:   Z=0 if file meets condition
+;        Z=1 if file does not meet condition
+         jmp   SELF_MODIFIED_WORD
+
+.is_ps_graphic
+         ldy   #kFileEntryFileType
+         lda   (entry_ptr), y
+         cmp   #filetype_bin
+         bne   +
+         ldy   #kFileEntryFileSize+1
+         lda   (entry_ptr), y
+         cmp   #$02
++        rts
+
+.is_ps_screen
+         ldy   #kFileEntryFileSize+1
+         lda   (entry_ptr), y
+         cmp   #$1F
+         beq   +
+         cmp   #$20
++        rts
+
+min_prefixed_asset_length = 6
+
+.is_ps_font
+         ldy   #$83
+         +HIDE_NEXT_2_BYTES
+.is_ps_border
+         ldy   #$87
+         +HIDE_NEXT_2_BYTES
+.is_ps_greeting_card
+         ldy   #$8B
+         +HIDE_NEXT_2_BYTES
+.is_ps_sign
+         ldy   #$8F
+         +HIDE_NEXT_2_BYTES
+.is_ps_letterhead
+         ldy   #$93
+         sty   .cmp+1
+         ldy   #0
+         lda   (entry_ptr), y
+         and   #$0F
+         cmp   #min_prefixed_asset_length
+         bcs   +
+         iny
+         bne   .is_ps_letterhead_done ; always branches
++        ldy   #5
+         lda   (entry_ptr), y
+         cmp   #$2E                  ; '.'
+         bne   .is_ps_letterhead_done
+         ldy   #1
+-        lda   (entry_ptr), y
+.cmp     cmp   $81FD, y              ; SMC low byte
+         bne   .is_ps_letterhead_done
+         iny
+         cpy   #5
+         bne   -
+.is_ps_letterhead_done
+         rts
+
+.is_nufx_archive
+         ldy   #kFileEntryFileType
+         lda   (entry_ptr), y
+         cmp   #filetype_nufx
+         bne   .is_nufx_archive_done
+         ldy   #kFileEntryAuxType
+         lda   (entry_ptr), y
+         cmp   #<auxtype_nufx
+         bne   .is_nufx_archive_done
+         iny
+         lda   (entry_ptr), y
+         cmp   #>auxtype_nufx
+.is_nufx_archive_done
+         rts
+
+}

@@ -1,0 +1,119 @@
+UI patches
+
+* [fixed] Setup should not ask how many disk drives you have (force 2)
+* [fixed] BUG: pressing <Esc> at print-test-page screen does not go back
+          because it's technically going back to the select-disk-drives screen
+          which is immediately selecting 2 and going forward again
+* [fixed] Saving any creation should not ask if you need to initialize a data disk
+          --> save-notes.txt
+* [fixed] "from other disk" UI should not mention data disk or drive number
+* [fixed] "exit program" (from main menu) should quit to ProDOS
+* [fixed] "from other disk" -> "from addon pack" (in menus)
+  - nope, that's too wide (proportional font!)
+  - maybe "from collection"
+  * maybe "from PS library"
+  - maybe "from add-ons"
+  - maybe "more choices..."
+
+unfortunately ][+ doesn't have TAB key
+but other parts of UI use "<CTRL-I>" wording e.g. edit-text screen
+
+* PLACE DATA DISK IN DRIVE 2
+  <CTRL-I> TO CHANGE LIBRARY
+
+012345678901234
+GRAPHICS.VOL.1
+GRAPHICS.VOL.2
+GRAPHICS.VOL.3
+HOLIDAY.EDITION
+PS.COMPANION
+SPECIAL.EDITION
+THIRD.PARTY
+
+* can hook $8B33 (AND 0x7F / CMP 0x7F) to JSR to routine that checks A for CTRL-I (0x89)
+  this is in SYSLIB
+
+-=-=-
+
+$8846 reusable routine for copy/clear/invert, used to clear screen regions and also redraw menu items on selection change
+  A is command
+    00 is bitcopy ($F4/F5 points to source, LDA ($F4), Y in inner loop)
+    01 is clear (LDA 0x00 in inner loop)
+    02 is invert
+    03 is clear-to-color (Y contains byte)
+  $F0 is left margin (byte offset, so like HTAB but 0-based, $00-$27)
+  $F1 is top margin (HGR row, 0-based, $00-$BF)
+  $F2 is right margin (also byte offset)
+  $F3 is height (HGR rows, destroyed during execution (DEC down to 0))
+  $F4/$F5 is source if command=0
+
+-=-=-
+
+Can we replicate the UI of browsing built-in graphics, but for other libraries?
+
+"browse by picture" menu starts at $70F1
+$7119 BLOADs appropriate I* file which contains one menu page worth of graphics (see below)
+$712A clears inner screen
+$7131 writes "CHOOSE A GRAPHIC" text near top
+  param block at $773F
+$7138 writes "SEE MORE CHOICES" menu item text in appropriate spot near bottom
+  param block at $774B
+  02 02 50 00 94 00 00 02 00 79 77 02
+menu param block at $71C3
+  0B        ; item count
+  33 77     ; menu list parm block
+  D7 76     ; onselectionchange event
+  02 13 3B  ; left (bytes), width (bytes), top (HGR rows)
+menu list parm block at $7733
+  02 00 18 00 44 00 ; ???
+  00 02 00
+  00 57             ; address of menu items list ($5700)
+  02
+$76F4 calls $8846 to clear the graphic area with white
+$76F7 gets the current selected menu index (1-based), DEX, CPX 0x0A to see if we're now on the "see more choices" item
+- if so, LDX 0x8B / LDY 0x77 / JMP $8843 (draws "press <return> to see more choices" text in graphics area)
+- if not, looks up bytes (address?) in $771F (lo?) and $7729 (hi?) and stores them in $6096 and $60D1 respectively,
+  then LDX 0x57 / LDY 0x77 / JMP $8843
+all of these routines and param blocks appear to be in memory when choosing a graphic from another disk, yay
+tables at $771F and $7729 imply that all graphics for one page of "browse by picture" are loaded into memory at once
+at intervals of $23C
+- $406A
+- $42A6
+- $44E2
+- $471E
+- $495A
+- $4B96
+- $4DD2
+- $500E
+- $524A
+- $5486
+
+orig 81D3 is 0A 14 27 02 00 4E 00 30 00 00 02 00
+ new 81D3    02 13 3B 02 00 18 00 44 00 00 02 00
+             |------|
+         reposition menu to match "browse by picture"
+ (unclear what the remaining parameters do)
+
+eventually
+81D1:xx xx to point to onselectionchange event
+or patch existing one
+
+$774B is 02 02 50 00 94 00 00 02 00 79 77 02 (prints 'SEE MORE CHOICES' after menu for 'browse by picture')
+$81C2 is 02 00 4A 00 90 00 00 02 00 B0 81 02 (prints 'SEE MORE CHOICES' after menu for 'from other disk')
+                     ^^             ^^^^^
+         top, set dynamically / string address
+
+change $8143 from 0x28 to 0x3C to line up 'SEE MORE CHOICES' vertically
+change $81C4 from 0x4A to 0x10 to line up 'SEE MORE CHOICES' horizontally
+
+-=-=-
+
+border live-preview?
+
+built-in border menu onselectionchange is at $4886
+first 3 borders are handled specially
+rest are handled at $48F3
+just loops through a bunch of positions and draws the border piece at that location with PS_FILL_RECT, command=copy
+$492E gets source address from arrays at $497B and $4982
+argh these borders aren't real border files, they're precomputed for HGR
+PS Companion has real border parser in Border Editor

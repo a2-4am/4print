@@ -1,0 +1,77 @@
+Loading saved cards/signs/letterhead
+
+'Sign' -> 'from other disk'
+$4026 -> $1003 -> $11F0
+$11F4 JSR $1254 to select file
+success continues at $11FC
+$120E JSR $128D
+- $12D5 JSR $1354 which swap-copies $500 bytes from $1800+ (where file will be loaded) with $8300+
+- $12DE JSR $130E which (conditionally?) swap-copies $240 bytes $1D00+ <--> $5800+
+- then $240 bytes $1F40 <--> $5A80
+- then $1800 bytes <--> $D000 (LCRAM)
+- then $1800 bytes <--> $E800 (LCRAM)
+- then $100 bytes <--> $DE00 (LCRAM but the other one)
+- then $100 bytes <--> $DF00 (LCRAM but the other one)
+...just a whole lotta swapping and copying back and forth
+to put all the data into a consecutive region of memory so it can use a BSAVE command
+then it swaps everything back
+
+Oh, it does this because it's relying on DOS 3.3 file commands, and BLOAD can only load
+a contiguous region of memory all in one shot.
+$5800 and $5A80 are graphic data, things in LCRAM are fonts and borders.
+So this routine is based on the assumption that all assets can be stored in memory at once.
+This is true for the original 1986 version but no longer true for our port, because
+font data is not cached in LCRAM.
+
+Hmm.
+
+Will likely need to rewrite load-card and save-card routines to take advantage of ProDOS MLI
+that can do partial reads from an open file into different memory regions, but also
+read font data from the selected origin file and write it into the save file without
+caching the entire thing in memory (which we don't have space for).
+
+Also need a way to specify that the font that the drawing routines now load from the origin file
+(routed through LoadFont) is actually coming from the saved card/sign/whatever file.
+In fact, it's coming from *inside* the file, starting at a particular offset and only
+reading a particular length. So that's gonna be ugly.
+
+-=-=-
+
+Saving cards/signs/letterhead
+
+All save flows go through $9600 which jumps to $96C1 to prompt to initialize a data disk
+First of all, we should skip this prompt,
+which is made difficult by the fact that each caller (card, sign, letterhead, screen, maybe others?)
+has a logic flow like
+  prompt to initialize -> save on other disk -> if Esc, go back to prompt
+so if the prompt auto-forwards then you're left in a soft-lock situation
+where you can't go "back" because going back just goes forward again.
+Each caller must be patched individually so that Esc from other-disk goes back to the screen
+before the initialize prompt (different for each caller).
+* [fixed] saving creation then pressing Esc on from-other-disk/from-PS-library screen soft-locks
+  * [fixed] saving greeting card
+  * [fixed] saving sign
+  * [fixed] saving letterhead
+  * [fixed] saving screen
+  * [fixed] saving graphic from editor
+
+Once that is sorted, can we use the fact that all flows go through $96C1
+to set up the other-disk screen for saving?
+No this won't work because the other-disk screen ($7025) returns C=0,X=0 if the user
+pressed <Return> to select from the disk catalog, and each caller has its own logic
+after $7025 returns to try selecting from the disk catalog, then it re-calls $7025.
+Oh actually that's only true for certain asset types (primarily screens).
+Other asset types do call the disk catalog selection routine internally before $7025 returns.
+Might be able to patch that out so $7025 always handles the entire flow internally.
+If so, then maybe the $9600-sets-flag idea works after all.
+Yes, patching out the special case for screens at the end of $7025 routine appears
+to have no ill effects, and it allows the rest of this crazy scheme to work.
+We can hook $7025 (after patching direct calls to $72EE which bypass it) so it resets
+the 'save' flag after $7025 returns.
+
+Save flow identical to load flow EXCEPT
+* [fixed] does not display the library name, or always displays 'SAVED', or even a full pathname
+  (there is no "current" library because all saves go into a single subdirectory)
+* [fixed] does not display the 'Tab to change library' prompt
+* [fixed] does not support changing libraries
+* [fixed] enumeration of the disk catalog should always look at raw files within the hardcoded subdirectory

@@ -1,0 +1,64 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+
+move_paths
+!pseudopc PATHS {
+
+dir_graphics
+         +PATH "GRAPHICS"
+dir_screens
+         +PATH "SCREENS"
+dir_fonts
+         +PATH "FONTS"
+dir_borders
+         +PATH "BORDERS"
+dir_saved
+dir_card
+dir_sign
+dir_letterhead
+         +PATH "SAVED.CREATIONS"
+
+dir_ptr_lo
+         !byte <dir_graphics
+         !byte <dir_screens
+         !byte <dir_fonts
+         !byte <dir_borders
+         !byte <dir_card
+         !byte <dir_sign
+         !byte <dir_letterhead
+
+dir_ptr_hi
+         !byte >dir_graphics
+         !byte >dir_screens
+         !byte >dir_fonts
+         !byte >dir_borders
+         !byte >dir_card
+         !byte >dir_sign
+         !byte >dir_letterhead
+
+; currently selected library for each asset type
+graphics_library
+         +PATH "GRAPHICS.VOL.1"
+         !byte 0                     ; pad to $10 bytes total
+screen_library
+         +PATH "HOLIDAY.EDITION"
+font_library
+         +PATH "HOLIDAY.EDITION"
+border_library
+         +PATH "HOLIDAY.EDITION"
+
+; other paths
+ps_code_library
+         +PATH "REPRINT.DATA"
+
+embedded_font_bload_suffix
+         !raw  ",O$XXXX,L$1800,"
+font_bload_suffix
+         !raw  "A$5FF4,D2",0
+
+ctrl_i_to_change
+         !raw  "<CTRL-I> TO CHANGE LIBRARY",0
+!if (* > $300) { !serious "PATHS region is too big", * }
+
+}

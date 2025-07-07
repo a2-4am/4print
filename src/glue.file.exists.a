@@ -1,0 +1,46 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - FileExists
+;
+
+!zone {
+
+.parm_exists_file_info
+         !byte $A                    ; parm count
+.parm_exists_filename_ptr
+         !word parsed_filename       ; pointer to length-prefixed filename
+         !byte 0                     ; access
+         !byte 0                     ; file type
+         !word 0                     ; aux type (= load address for binary files)
+         !byte 0                     ; storage type
+.parm_exists_len
+         !word 0                     ; blocks used
+         !word 0                     ; last modified date
+         !word 0                     ; last modified time
+         !word 0                     ; creation date
+         !word 0                     ; creation time
+
+FileExists
+; in:    X/Y -> length-prefixed filename
+; out:   A=blocks used (lo) if file exists
+;        A=0 if file does not exist
+         stx   zp_array-first_zp+PTR
+         sty   zp_array-first_zp+PTR+1
+         jsr   SwapZP
+         jsr   ParsePSFilename
+         +LDADDR dir_saved
+         jsr   ToSubdirectory
+         jsr   PRODOS_MLI
+         !byte CMD_GET_FILE_INFO
+         !word .parm_exists_file_info
+         php
+         jsr   ToRootDirectory
+         jsr   SwapZP
+         plp
+         lda   #0
+         bcs   +
+         lda   .parm_exists_len
++        rts
+}

@@ -1,0 +1,257 @@
+;license:MIT
+;(c) 2024 by 4am
+;
+
+SELF_MODIFIED_BYTE        = $FD
+SELF_MODIFIED_WORD        = $FDFD
+
+; standard memory addresses
+CH                        = $24
+CV                        = $25
+BASL                      = $28
+INVFLG                    = $32
+RWTS_PTR                  = $48
+RNDL                      = $4E
+RNDH                      = $4F
+PRODOS_MLI                = $BF00
+PRODOS_BOOT_UNIT          = $BF30
+PRODOS_MEMORY_MAP         = $BF58
+PRODOS_MACHID             = $BF98
+KBD                       = $C000
+CLEARKBD                  = $C010
+STOREOFF                  = $C000    ; STA then use the following 4 flags:
+READMAINMEM               = $C002    ; STA to read from main mem
+READAUXMEM                = $C003    ; STA to read from aux mem
+WRITEMAINMEM              = $C004    ; STA to write to main mem
+WRITEAUXMEM               = $C005    ; STA to write to aux mem
+CLR80VID                  = $C00C    ; 40 columns
+PRIMARYCHARSET            = $C00E    ; no mousetext for you
+ALTCHARSET                = $C00F    ; yay mousetext
+CLEARKBD                  = $C010    ; clear last key pressed
+SLOT3STATUS               = $C017    ; bit 7 only
+MONOCOLOR                 = $C021    ; IIgs bit 7 switches composite mono/color modes
+TBCOLOR                   = $C022    ; IIgs text foreground and background colors (also VidHD but write-only)
+NEWVIDEO                  = $C029    ; IIgs graphics modes (also VidHD)
+CLOCKCTL                  = $C034    ; bits 0-3 are IIgs border color (also VidHD)
+GFXMODE                   = $C050
+TEXTMODE                  = $C051
+FULLGFX                   = $C052
+MIXEDGFX                  = $C053
+PAGE1                     = $C054    ; page 1 (affects text, HGR, DHGR)
+PAGE2                     = $C055    ; page 2 (affects text, HGR, DHGR)
+HIRES                     = $C057
+ROM_TEXT                  = $FB2F
+ROM_FINALIZE_RESET        = $FB6F
+ROM_MACHINEID             = $FBB3
+ROM_MACHINEID2            = $FBC0
+ROM_BASCALC               = $FBC1
+ROM_HOME                  = $FC58
+ROM_CLREOL_FROM_Y         = $FC9E
+ROM_WAIT                  = $FCA8
+ROM_KEYIN                 = $FD1B
+ROM_COUT                  = $FDED
+ROM_INVERSE               = $FE80    ; INVERSE text
+ROM_NORMAL                = $FE84    ; NORMAL text (instead of INVERSE or FLASH)
+ROM_IN0                   = $FE89    ; SETKBD
+ROM_PR0                   = $FE93    ; SETVID
+ROM_SAVEREGS              = $FF4A
+
+; ProDOS constants
+CMD_QUIT                  = $65
+CMD_CREATE                = $C0
+CMD_DESTROY               = $C1
+CMD_GET_FILE_INFO         = $C4
+CMD_ONLINE                = $C5
+CMD_SETPREFIX             = $C6
+CMD_GETPREFIX             = $C7
+CMD_OPEN                  = $C8
+CMD_READ                  = $CA
+CMD_WRITE                 = $CB
+CMD_CLOSE                 = $CC
+CMD_SEEK                  = $CE
+CMD_POS                   = $CF
+
+; ProDOS error codes
+MLI_ERR_NONE              = $00
+MLI_IO_ERROR              = $27
+MLI_WRITE_PROTECTED       = $2B
+MLI_FILE_NOT_FOUND        = $46
+MLI_DUPLICATE_FILE        = $47
+MLI_DISK_FULL             = $48
+
+; Print Shop error codes (in PS_DISK_ERROR)
+PS_ERR_NONE               = $00
+PS_ERR_WRITE_PROTECTED    = $04
+PS_ERR_FILE_NOT_FOUND     = $06
+PS_ERR_DISK_FULL          = $09
+PS_ERR_FILE_LOCKED        = $0A
+PS_ERR_IO_ERROR           = $FF
+
+; application-specific addresses
+PTR                       = $50      ; 2 bytes, not owned, must save/restore
+VAL                       = $52      ; 2 bytes, not owned, must save/restore
+entry_ptr                 = PTR
+entry_length              = VAL
+entries_remaining_in_block= VAL+1
+first_zp                  = $40      ; for SwapZP
+last_zp                   = $53      ; for SwapZP, includes extra 4 bytes for PTR ($50/$51) and VAL ($52/$53)
+dir_root                  = $201
+PREFIX_BUFFER             = dir_root ; $41 bytes, owned
+PATHS                     = dir_root + $41
+
+; addresses (from original code)
+PS_INDEX_IN_PAGE          = $14      ; byte, current selected menu index
+PS_PAGES                  = $15      ; byte, menu page count
+PS_ITEMS                  = $16      ; byte, menu item count (total, across all pages)
+PS_PAGE                   = $17      ; byte, current menu page
+PS_LEFT                   = $F0      ; byte
+PS_TOP                    = $F1      ; byte
+PS_WIDTH                  = $F2      ; byte
+PS_HEIGHT                 = $F3      ; byte
+PS_RECT_SRC               = $F4      ; word
+PS_DISK_ERROR             = $80F     ; byte (see PS_ERR_* codes)
+PS_LOAD_FONT              = $0CB7    ; entry point for original font loading routine
+PS_RESUME_LOAD_CARD       = $123E    ; entry point to clean up after our custom load card routine
+PS_FRONT_GFX_DATA         = $5800
+PS_INSIDE_GFX_DATA        = $5A80
+PS_DISPLAY_GFX_SRC_LO     = $6096    ; byte
+PS_DISPLAY_GFX_SRC_HI     = $60D1    ; byte
+PS_MENU                   = $700A    ; entry point for drawing and handling a menu
+PS_MENU_DEFAULT           = PS_MENU+3; byte, 1-based default index for menu / current index during onchange callback
+PS_MENU_CURRENT           = PS_MENU_DEFAULT
+PS_MENU_PARAMS            = PS_MENU+4; 8 bytes
+PS_MENU_ITEMS             = PS_MENU_PARAMS ; byte
+PS_REENTER_FOD            = $72F7    ; entry point to reenter 'from other disk' UI (must clear screen and fix stack first)
+library_display_name      = $73B7    ; technically part of original code but string has been patched
+change_library_text       = $73C8    ; technically part of original code but string has been patched
+PS_TO_SEE_MORE_CHOICES    = $76FF    ; entry point to display 'press return to see more choices' text in live-preview graphics browser
+PS_ASSET_TYPE             = $7912    ; byte, see PS_ASSET_* constants
+                                     ; only available during selection/edit
+                                     ; clobbered by printing code (DRAW1)
+PS_SELECT_ENUMERATED      = $8068    ; entry point to continue 'from other disk' menu UI after enumerating available assets
+PS_CLEARSCREEN            = $8128    ; clears inner region on screen (leaves outer frame and 'choose asset:' label)
+PS_FOD_ONSELECTIONCHANGE  = $8132    ; entry point of original onselectionchange routine for 'from other disk' menus
+PS_FOD_MENU_PARMS         = $81D1    ; $0E bytes
+PS_PAGE_START_LO          = $8200    ; 16 bytes, override, original code uses only 9 bytes at $8172
+                                     ; only available during selection/edit
+                                     ; clobbered by printing code (DRAW1)
+PS_PAGE_START_HI          = $8210    ; 16 bytes, override, original code uses only 9 bytes at $817B
+PS_CARD_DATA              = $8300
+PS_FRONT_OR_INSIDE        = PS_CARD_DATA ; byte, greeting card uses 0 (front) or 1 (inside)
+                                     ; sign uses 2
+                                     ; letterhead uses 0 (top) or 1 (bottom)
+                                     ; banner uses 0
+PS_MENUKEY                = $83FF    ; byte, 7-bit ASCII of key pressed to exit menu, $0D or $1B
+PS_FRONT_FONT_ID          = $85C0
+PS_FRONT_BORDER_ID        = $85C1
+PS_FRONT_GFX_ID           = $85C2
+PS_INSIDE_FONT_ID         = $87C0
+PS_INSIDE_BORDER_ID       = $87C1
+PS_INSIDE_GFX_ID          = $87C2
+PS_DISPLAY_GFX            = $8843    ; entry point to display PS graphic on screen
+PS_FILL_RECT              = $8846    ; entry point of reusable routine for copy/clear/invert
+                                     ; used to clear screen regions
+                                     ; also used to redraw menu items on selection change
+                                     ; A is command
+                                     ;   00 is bitcopy ($F4/F5 points to source, LDA ($F4), Y in inner loop)
+                                     ;   01 is clear (LDA #$00 in inner loop)
+                                     ;   02 is invert
+                                     ;   03 is clear-to-color (Y contains byte)
+                                     ; $F0 is left margin (byte offset, so like HTAB but 0-based, $00-$27)
+                                     ; $F1 is top margin (HGR row, 0-based, $00-$BF)
+                                     ; $F2 is width (byte offset)
+                                     ; $F3 is height (HGR rows, destroyed during execution (DEC down to 0))
+PS_BLOAD_STRING           = $9190    ; $20(?) bytes, populated by routine near $AF1 with BLOAD string
+FLIPPER                   = $91C0    ; $80 bytes
+YBASEHI                   = $9240    ; $C0 bytes
+YBASELO                   = $9300    ; $C0 bytes
+PS_MAIN_TYPE              = $95F5    ; byte, maps directly to main menu selection
+                                     ; 1 = greeting card, 2 = sign, 3 = letterhead, 4 = banner, 5 = screen magic
+
+; addresses (ours)
+;9AA5+ available for our use
+zp_array                  = $9AA5    ; $14 bytes
+parsed_filename           = $9AB9    ; $10 bytes
+suffix_address            = $9AC9    ; $02 bytes
+suffix_length             = suffix_address+$02  ; $02 bytes
+suffix_drive              = suffix_length+$02   ; $02 bytes
+suffix_offset             = suffix_drive+$02    ; $02 bytes
+;9AD1
+save_5ff4                 = $9AF4    ; $0C bytes
+CODE_START                = $9B00    ; $1500 bytes, owned
+CODE_END                  = $B000
+PRODOS_BUFFER             = CODE_END ; $400 bytes, owned
+output_buffer             = $B400    ; $500 bytes, owned (used for menu lists instead of LCRAM)
+enum_nufx_offset_cache_lo = $B900    ; up to $80 bytes, owned
+enum_nufx_offset_cache_hi = $B980    ; up to $80 bytes, owned
+FRONT_BORDER_DATA         = $BA00    ; $100 bytes, not owned
+INSIDE_BORDER_DATA        = $BB00    ; $100 bytes, not owned
+DIR_BUFFER                = $BC00    ; $200 bytes, owned
+GFX_BUFFER                = $BC00    ; $240 bytes, owned, overlap
+                                     ; $96 bytes is also used as scratch space by border drawing routine
+                                     ; (binary patched 2x in DRAW1)
+nufx_dirbuff              = $BE40    ; $21 bytes, owned
+nufx_readbuff             = $BE61    ; $1F bytes, owned
+enum_nufx_offset_cache_very_hi = $BE80 ; up to $80 bytes, owned
+
+; constants (from original code)
+PS_FRONT                  = $00
+PS_INSIDE                 = $01
+
+PS_ASSET_GFX              = $00
+PS_ASSET_SCREEN           = $01
+PS_ASSET_FONT             = $02
+PS_ASSET_BORDER           = $03
+PS_ASSET_CARD             = $04      ; saved greeting card
+PS_ASSET_SIGN             = $05      ; saved sign
+PS_ASSET_LETTERHEAD       = $06      ; saved letterhead
+asset_nufx                = $07      ; custom, used by our SelectLibrary
+
+PS_MAIN_TYPE_CARD         = $01
+PS_MAIN_TYPE_SIGN         = $02
+PS_MAIN_TYPE_LETTERHEAD   = $03
+PS_MAIN_TYPE_BANNER       = $04
+PS_MAIN_TYPE_SCREEN_MAGIC = $05
+PS_MAIN_TYPE_GFX_EDITOR   = $06
+
+PS_HAS_EXT_GFX            = $FF
+PS_HAS_EXT_FONT           = $09
+PS_HAS_EXT_BORDER         = $0A
+
+; constants for directory enumeration
+filetype_bin              = $06
+filetype_nufx             = $E0
+auxtype_nufx              = $8002
+
+; constants (offsets) for directory enumeration
+kVolDirHeaderEntryLength  = $23
+kVolDirHeaderEntriesPerBlock = $24
+kVolDirHeaderSizeof       = $2B
+kFileEntryStorageType     = $00
+kFileEntryFileType        = $10
+kEnumNuFXOffset           = $11      ; not part of ProDOS file entry but returned by NuFXFindFirst/Next
+kFileEntryFileSize        = $15      ; 3 bytes!!!
+kFileEntryAuxType         = $1F      ; 2 bytes
+
+; constants (libnufx)
+nufx_master_size            = 11
+nufx_total_recs             = 8
+nufx_local_off              = 48
+nufx_local_size             = 31
+nufx_header_crc             = 4
+nufx_attrib_count           = 6
+nufx_threads                = 10
+nufx_file_type              = 22
+nufx_aux_type               = 26
+nufx_storage_type           = 30
+nufx_thread_size            = 16
+nufx_data_thread            = 2
+nufx_data_format            = 2
+nufx_format_zx0             = 8
+nufx_data_crc               = 6
+nufx_data_size              = 8
+nufx_comp_size              = 12
+nufx_name_thread            = 3
+nufx_name_off               = 8
+nufx_name_max               = 12
+nufx_dirbuff_size           = 33

@@ -1,0 +1,67 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - LoadFont
+; - save_restore_5ff4 (used by SaveCard)
+;
+
+LoadFont
+; jumped to from $810 via jump table
+; original routine is at $CB7 and we conditionally call it
+; if we don't need to override the behavior (built-in fonts)
+; in:    A=1-8 for loading a built-in font
+;        A=9 if loading 'from other disk' (a.k.a. 'from PS library')
+; out:   all clobbered
+         cmp   #$09
+         beq   +
+         jmp   PS_LOAD_FONT
++        jsr   save_restore_5ff4
+         lda   PS_FRONT_OR_INSIDE
+         ldy   PS_MAIN_TYPE
+         cpy   #PS_MAIN_TYPE_LETTERHEAD
+         bne   +
+
+         ; letterhead front-or-inside index is swapped!
+         ; original code does this exact check!
+         ; I don't know why!
+         ; everything is fractally terrible!
+         eor   #$01
+
++        jsr   GetFontBloadString
+         tax
+         jsr   BloadFont
+         lda   #$58                  ; reproduce original code to patch font data
+         sta   $602C-$c
+         lda   #$34
+         sta   $6067-$c
+         lda   #$00
+         sta   $60A2-$c
+         lda   #$58
+         sta   $60DD-$c
+         ldx   #$3A
+-        lda   $600C-$c, x
+         and   #$7F
+         sta   $600C-$c, x
+         dex
+         bpl   -
+         ldx   #$0B                  ; reproduce original code to copy font props
+-        lda   $6000-$c, x
+         sta   $816, x
+         dex
+         bpl   -
+         ; /!\ execution falls through here
+
+save_restore_5ff4
+         ; need to save/restore bytes before $6000
+         ; so Screen Magic doesn't show garbage after loading font
+         ldy   #$0B
+-        lda   $5FF4, y
+         pha
+         lda   save_5ff4, y
+         sta   $5FF4, y
+         pla
+         sta   save_5ff4, y
+         dey
+         bpl   -
+         rts

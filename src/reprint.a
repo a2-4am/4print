@@ -1,0 +1,52 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+!cpu 6502
+!to "build/REPRINT.SYSTEM#FF2000",plain
+*=$2000
+
+         !src  "src/constants.a"
+         !src  "src/macros.a"
+         !src  "src/loader.init.a"
+         
+move_code
+!pseudopc CODE_START {
+         ; jump table for binary patches to original PS code
+         jmp   Bload                            ; 9B00
+         jmp   Bsave                            ; 9B03
+         jmp   FileExists                       ; 9B06
+         jmp   FromOtherDisk                    ; 9B09
+         jmp   FromOtherDiskSeeChoices          ; 9B0C
+         jmp   FromOtherDiskSelectLibrary       ; 9B0F
+         jmp   FromOtherDiskUpdateLibraryName   ; 9B12
+         jmp   GetSelectedFontProps             ; 9B15
+         jmp   BloadFromFileOnly                ; 9B18
+         jmp   LoadFont                         ; 9B1B
+         jmp   ShowVersion                      ; 9B1E
+         jmp   OnFontSelected                   ; 9B21
+         jmp   InitializeDataDisk               ; 9B24
+         jmp   SaveCard                         ; 9B27
+         jmp   LoadCard                         ; 9B2A
+
+         !src  "src/libnufx.a"
+         !src  "src/glue.bload.a"
+         !src  "src/glue.bsave.a"
+         !src  "src/glue.enumerate.a"
+         !src  "src/glue.is.a"
+         !src  "src/glue.file.exists.a"
+         !src  "src/glue.save.card.a"
+         !src  "src/glue.load.card.a"
+         !src  "src/glue.load.font.a"
+         !src  "src/glue.on.font.selected.a"
+         !src  "src/glue.psfilename.a"
+         !src  "src/util.prodos.a"
+         !src  "src/util.swapzp.a"
+         !src  "src/ui.version.a"
+         !src  "src/ui.from.other.disk.a"
+         !src  "src/ui.select.library.a"
+         !src  "src/ui.select.border.a"
+
+!if (* > CODE_END) { !serious "code is too large", * }
+;!warn *
+}
+end_move_code

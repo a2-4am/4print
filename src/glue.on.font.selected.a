@@ -1,0 +1,260 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - OnFontSelected
+; - SetSelectedFontAsEmbedded
+; - GetSelectedFontLibrary
+; - GetFontPropertiesFromCache
+; - GetFontBloadString
+;
+
+!zone {
+
+.selected_font_properties0
+         !fill $0C
+.selected_font_properties1
+         !fill $0C
+.selected_font_properties_ptr_lo                ; indexed by PS_FRONT_OR_INSIDE
+         !byte <.selected_font_properties0      ; index 0 = 'greeting card' front
+         !byte <.selected_font_properties1      ; index 1 = 'greeting card' inside
+.selected_font_properties_ptr_hi
+         !byte >.selected_font_properties0
+         !byte >.selected_font_properties1
+
+.selected_font_library0
+         !fill $10
+.selected_font_library1
+         !fill $10
+.selected_font_library_ptr_lo                   ; indexed by PS_FRONT_OR_INSIDE
+         !byte <.selected_font_library0
+         !byte <.selected_font_library1
+.selected_font_library_ptr_hi
+         !byte >.selected_font_library0
+         !byte >.selected_font_library1
+
+.selected_font_bload_string0
+         !fill $30
+.selected_font_bload_string1
+         !fill $30
+.selected_font_bload_string_ptr_lo              ; indexed by PS_FRONT_OR_INSIDE
+         !byte <.selected_font_bload_string0
+         !byte <.selected_font_bload_string1
+.selected_font_bload_string_ptr_hi
+         !byte >.selected_font_bload_string0
+         !byte >.selected_font_bload_string1
+
+OnFontSelected
+; jumped to from $806 via jump table
+; original routine is at $AEC
+; For fonts (A=0 on entry), we patch the original routine and call part of it
+; then do our own thing to prepare for the actual font file load, which we defer.
+; For other assets, we exit via original routine.
+; Note the original routine is hard-patched on disk to cache border files at
+; $BA00 and $BB00 instead of $DE00 and $DF00 (in LCRAM), with a
+; matching patch in the border drawing routine.
+; in:    A=type (0=font, 1=border, 2=greeting card, 3=sign, 4=letterhead)
+; out:   Z=1 if success
+;        Z=0 if error
+         tay
+         beq   +
+         jmp   $AEC                  ; exit via original code
++
+         ; for fonts, load font properties only, and cache them
+         sta   $B5                   ; used by original code we're about to call
+         lda   #$60                  ; patch
+         sta   $B70
+         ldx   #'B'                  ; -> $BC00 for GFX_BUFFER
+         stx   $B15
+         inx
+         stx   $B18
+         jsr   $AF1                  ; construct DOS-style BLOAD string but don't load
+         ; X/Y -> BLOAD string
+         lda   #$34                  ; unpatch
+         sta   $B15
+         lda   #$30
+         sta   $B18
+         lda   #$20
+         sta   $B70
+         jsr   BloadFontProps        ; load font properties (first $0C bytes of font file)
+         ldx   $B0                   ; error handling from original code
+         ldy   $B1
+         jsr   $6F00
+         beq   .remember_font_selection
+         lda   #0                    ; more error handling from original code
+         tay
+         sta   ($B0), y
+         lda   #1
+         rts
+.remember_font_selection
+         ; copy selected library for loading the whole font later
+         jsr   .get_current_library_ptr
+         +ST16 .load_from_library
+         jsr   GetSelectedFontLibrary
+         +ST16 .save_in_library_cache
+         ldx   #$0F
+.load_from_library=*+1
+-        lda   SELF_MODIFIED_WORD, x
+.save_in_library_cache=*+1
+         sta   SELF_MODIFIED_WORD, x
+         dex
+         bpl   -
+
+         ; copy font BLOAD string up to and including first ','
+         lda   PS_FRONT_OR_INSIDE
+         jsr   GetFontBloadString
+         +ST16 .save_in_bload_cache1
+         +ST16 .save_in_bload_cache2
+         ldx   #$00
+-        lda   PS_BLOAD_STRING, x
+.save_in_bload_cache1=*+1
+         sta   SELF_MODIFIED_WORD, x
+         inx
+         cmp   #$2C                  ; ','
+         bne   -
+         ; add our BLOAD address and virtual drive specification
+         ldy   #$00
+-        lda   font_bload_suffix, y
+.save_in_bload_cache2=*+1
+         sta   SELF_MODIFIED_WORD, x
+         beq   +                     ; very important to copy the null terminator!
+                                     ; ask me how I know!
+         iny
+         inx
+         bne   -
++
+         jsr   .get_selected_font_properties_ptr
+         +ST16 .save_in_prop_cache
+         ldx   #$0B
+-        lda   GFX_BUFFER, x         ; reproduce original code to save font properties
+         sta   $816, x               ; in edit-text params for next screen
+.save_in_prop_cache=*+1
+         sta   SELF_MODIFIED_WORD, x ; also save font properties in our own cache
+                                     ; because we may need them again after
+                                     ; the edit-text params have been clobbered
+                                     ; (example: greeting card has two different fonts,
+                                     ; you get to print menu then back up, we'll need
+                                     ; to refresh the edit-text params)
+         dex
+         bpl   -
+.success
+         lda   #0                    ; set Z=1 for caller to indicate success
+         rts
+
+HexToASCII
+; in:    A = hex value
+; out:   A/Y = ASCII values (bit 7=0 on each)
+;        preserves X
+         pha
+         jsr   +
+         tay
+         pla
+         lsr
+         lsr
+         lsr
+         lsr
++        and   #$0F
+         ora   #$30
+         cmp   #$3A
+         bcc   +
+         adc   #$06
++        rts
+
+SetSelectedFontAsEmbedded
+; called when loading saved creation (card/sign/letterhead) with embedded fonts
+; to construct a BLOAD string to load the font from inside the file later
+; in:    X = PS_FRONT or PS_INSIDE
+;        A/Y = file offset (technically 3 bytes but highest is always #$00)
+         pha
+         tya
+         jsr   HexToASCII
+         +ST16 embedded_font_bload_suffix+3
+         pla
+         jsr   HexToASCII
+         +ST16 embedded_font_bload_suffix+5
+         ; copy filename of saved creation
+         txa
+         jsr   GetFontBloadString
+         +ST16 .save_embedded_in_bload_cache1
+         +ST16 .save_embedded_in_bload_cache2
+         ldx   #$00
+-        lda   parsed_filename+1, x
+.save_embedded_in_bload_cache1=*+1
+         sta   SELF_MODIFIED_WORD, x
+         inx
+         cpx   parsed_filename
+         bne   -
++
+         ; add our BLOAD address and virtual drive specification
+         ldy   #$00
+-        lda   embedded_font_bload_suffix, y
+.save_embedded_in_bload_cache2=*+1
+         sta   SELF_MODIFIED_WORD, x
+         beq   +                     ; very important to copy the null terminator!
+                                     ; ask me how I know!
+         iny
+         inx
+         bne   -
++        rts
+
+GetSelectedFontProps
+; called as subroutine from $4A53 via jump table
+; in:    none
+; out:   X = 1st byte of selected font properties
+;        Y = 2nd byte of selected font properties
+;        C=0 (used by patched caller to branch to $4A6B to continue)
+         jsr   .get_selected_font_properties_ptr
+         +ST16 .cache1
+         +ST16 .cache2
+         ldy   #0
+.cache1=*+1
+         ldx   SELF_MODIFIED_WORD, y
+         iny
+.cache2=*+1
+         lda   SELF_MODIFIED_WORD, y
+         tay
+         clc
+         rts
+
+.get_current_library_ptr
+         ldx   PS_ASSET_TYPE
+         lda   current_library_ptr_lo, x
+         ldy   current_library_ptr_hi, x
+         rts
+
+.get_selected_font_properties_ptr
+         lda   PS_FRONT_OR_INSIDE
+         jsr   .normalize_index
+         lda   .selected_font_properties_ptr_lo, x
+         ldy   .selected_font_properties_ptr_hi, x
+         rts
+
+GetSelectedFontLibrary
+; in:    none
+; out:   A/Y -> font library string
+         lda   PS_FRONT_OR_INSIDE
+         jsr   .normalize_index
+         lda   .selected_font_library_ptr_lo, x
+         ldy   .selected_font_library_ptr_hi, x
+         rts
+
+GetFontBloadString
+; in:    A = PS_FRONT or PS_INSIDE (caller must set! it's complicated!)
+; out:   A/Y -> font BLOAD string
+         jsr   .normalize_index
+         lda   .selected_font_bload_string_ptr_lo, x
+         ldy   .selected_font_bload_string_ptr_hi, x
+         rts
+
+.normalize_index
+; in:    A = some index that really ought to be either PS_FRONT or PS_INSIDE
+;            but might be 2 or -1 or pi, which are not actually helpful things
+;            for an index to be
+; out:   X = PS_FRONT or PS_INSIDE, and no other values
+         tax                         ; set N flag
+         bpl   +
+         lda   #0
++        and   #1                    ; 'sign' uses 2 to mean 0
+         tax
+         rts
+}

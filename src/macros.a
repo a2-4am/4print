@@ -1,0 +1,55 @@
+;license:MIT
+;(c) 2024 by 4am
+;
+
+!macro PATH .prodosname {
+         !byte +-*-1
+         !raw  .prodosname
++
+}
+
+!macro LDADDR .addr {
+         lda   #<.addr
+         ldy   #>.addr
+}
+
+!macro LD16 .addr {
+         lda   .addr
+         ldy   .addr+1
+}
+
+!macro ST16 .addr {
+         sta   .addr
+         sty   .addr+1
+}
+
+; clobbers A
+!macro STA_16 .addr, .value {
+         lda   #<.value
+         sta   .addr
+         lda   #>.value
+         sta   .addr+1
+}
+
+!macro MAKE_JSR .addr, .dest {
+         lda   #$20
+         sta   .addr
+         +STA_16 .addr+1, .dest
+}
+
+; clobbers A
+!macro MAKE_JMP .addr, .dest {
+         lda   #$4C
+         sta   .addr
+         +STA_16 .addr+1, .dest
+}
+
+; use BIT to swallow the following 1-byte opcode
+!macro   HIDE_NEXT_BYTE {
+         !byte $24
+}
+
+; use BIT to swallow the following 2-byte opcode
+!macro   HIDE_NEXT_2_BYTES {
+         !byte $2C
+}

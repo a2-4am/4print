@@ -1,0 +1,92 @@
+;license:MIT
+;(c) 2024 by 4am
+;
+
+;
+; .SYSTEM code starts here
+;
+
+!zone {
+
+;
+; Ensure ProDOS has a current prefix, otherwise opening any file will fail,
+; which is bad. If launched from Bitsy Bye, there will be no current prefix.
+; In that case, we get the boot volume name, then set the prefix to that.
+; PREFIX_BUFFER ($41 bytes) is clobbered but may be reused after.
+;
+prefix_loop
+         jsr   PRODOS_MLI
+op_prefix
+         !byte CMD_GETPREFIX         ; self-modified
+         !word parm_prefix
+         ldx   PREFIX_BUFFER         ; if we have a prefix, we're done
+         bne   clear_memory_map
+
+         ; no prefix (len=0) so get boot volume name instead
+         lda   PRODOS_BOOT_UNIT
+         sta   parm_online_unit
+         jsr   PRODOS_MLI
+         !byte CMD_ONLINE
+         !word parm_online
+
+         lda   PREFIX_BUFFER+1
+         and   #$0F
+         tax
+         inx
+         stx   PREFIX_BUFFER
+         lda   #$2F
+         sta   PREFIX_BUFFER+1
+         ; PREFIX_BUFFER is now a length-prefixed string
+         ; of '/' + the boot volume name
+
+         dec   op_prefix             ; -> CMD_SETPREFIX
+         bne   prefix_loop           ; always branches
+
+parm_prefix
+         !byte 1
+         !word PREFIX_BUFFER
+
+parm_online
+         !byte 2
+parm_online_unit
+         !byte SELF_MODIFIED_BYTE
+         !word PREFIX_BUFFER+1
+
+clear_memory_map
+         ; clear ProDOS memory bitmap
+         ldy   #$18
+         lda   #$00
+-        sta   PRODOS_MEMORY_MAP-1, y
+         dey
+         bne   -
+
+         ldy   #$42
+-        lda   move_paths-$42, y
+         sta   PATHS-$42, y
+         iny
+         bne   -
+         ;Y=0
+.src     lda   move_code, y
+.dst     sta   CODE_START, y
+         iny
+         bne   .src
+         inc   .src+2
+         inc   .dst+2
+         lda   .src+2
+         cmp   #(>end_move_code)+1
+         bcc   .src
+
+         +LDADDR Quit
+         +ST16 $3F2
+         jsr   ROM_FINALIZE_RESET
+
+         ldx   #<dos_hello
+         ldy   #>dos_hello
+         jsr   Bload                 ; A$800, L$7C7 (no need to move ourselves from $2000)
+         jmp   $800
+
+dos_hello
+         !raw  "HELLO",0
+
+         !src  "src/paths.a"
+}

@@ -1,0 +1,101 @@
+;license:MIT
+;(c) 2025 by 4am
+;
+; public functions
+; - ParsePSFilename
+;
+; public variables
+; - parsed_filename
+; - suffix_address
+; - suffix_length
+; - suffix_drive
+; - suffix_offset
+;
+
+!zone {
+
+.suffix_value = suffix_address
+.num_suffixes = 4
+.suffixes
+         !raw  "ALDO"
+
+ParsePSFilename
+; in:    PTR -> Print Shop-style filename (7-bit ASCII, zero-terminated, possible ',A,L,D' keyword suffixes)
+; out:   |parsed_filename| contains ProDOS-compatible filename
+;        suffix_value array populated with values from each keyword, if any
+;        A/X/Y clobbered
+         ldy   #(2*.num_suffixes)
+         lda   #$00
+-        sta   .suffix_value-1, y
+         dey
+         bne   -
+         ;Y=0
+.filename_loop
+         ; gather characters until null byte or comma
+         lda   (PTR), y
+         beq   .done
+         iny
+         cmp   #$2C                  ; ','
+         beq   .comma
+         cmp   #$20
+         bne   +
+         lda   #$2E                  ; convert spaces to periods
++        sta   parsed_filename, y
+         sty   parsed_filename
+         bne   .filename_loop        ; always branches
+.error
+.done    rts
+
+.comma
+         ; found a comma, so check next character against recognized keywords
+         lda   (PTR), y
+         beq   .done
+         iny
+         ldx   #.num_suffixes-1
+-        cmp   .suffixes, x
+         beq   .good_keyword
+         dex
+         bpl   -
+         bmi   .error
+
+.good_keyword
+         txa
+         asl
+         sta   .store_value+1
+         lda   #$00
+         sta   VAL
+         sta   VAL+1
+.store_value
+         ldx   #SELF_MODIFIED_BYTE
+         lda   VAL
+         sta   .suffix_value, x
+         lda   VAL+1
+         sta   .suffix_value+1, x
+.value_loop
+         lda   (PTR), y
+         beq   .done
+         iny
+         cmp   #$24                  ; '$'
+         beq   .value_loop
+         cmp   #$2C                  ; ','
+         beq   .comma
+         sec
+         sbc   #$30
+         bmi   .error
+         cmp   #$0A
+         bcc   .good_digit
+         sbc   #$07
+         bmi   .error
+         cmp   #$10
+         bcs   .error
+.good_digit
+         ldx   #$04
+-        asl   VAL
+         rol   VAL+1
+         dex
+         bne   -
+         ora   VAL
+         sta   VAL
+         jmp   .store_value
+
+}
