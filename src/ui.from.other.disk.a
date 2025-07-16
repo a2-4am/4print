@@ -58,6 +58,7 @@ InitializeDataDisk
 ; output:      A=1 to match original code
          lda   #1                    ; set 'save' flag
          sta   fod_mode
+         sta   PS_MENUKEY
          rts
 
 FromOtherDisk
