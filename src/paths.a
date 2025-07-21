@@ -42,7 +42,8 @@ graphics_library
          +PATH "GRAPHICS.VOL.1"
          !byte 0                     ; pad to $10 bytes total
 screen_library
-         +PATH "HOLIDAY.EDITION"
+         +PATH "GRAPHICS.VOL.1"
+         !byte 0                     ; pad to $10 bytes total
 font_library
          +PATH "HOLIDAY.EDITION"
 border_library
