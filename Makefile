@@ -46,7 +46,7 @@ $(PRODOS) $(CLOCK) $(RES) $(CONFIG): $(BUILDDIR)
 	$(CADIUS) ADDFOLDER "$(BUILDDISK)" "/$(DISKVOLUME)/" "$@" -C
 
 # things that go in their own subdirectory
-$(GRAPHICS) $(FONTS) $(BORDERS) $(SCREENS) $(SAVED): $(BUILDDIR)
+$(GRAPHICS) $(FONTS) $(BORDERS) $(SCREENS): $(BUILDDIR)
 	$(CADIUS) ADDFOLDER "$(BUILDDISK)" "/$(DISKVOLUME)/$@/" "$@" -C
 
 # things that go in other subdirectories
@@ -63,8 +63,8 @@ $(SCREENS3P): $(BUILDDIR)
 	$(CADIUS) ADDFOLDER "$(BUILDDISK)" "/$(DISKVOLUME)/$(SCREENS)/" "$@" -C
 
 # things not included in this classification
-#$(SAVED): $(BUILDDIR)
-#	$(CADIUS) CREATEFOLDER "$(BUILDDISK)" "/$(DISKVOLUME)/$@/" -C
+$(SAVED): $(BUILDDIR)
+	$(CADIUS) CREATEFOLDER "$(BUILDDISK)" "/$(DISKVOLUME)/$@/" -C
 
 mount: $(BUILDDISK)
 	@open "$(BUILDDISK)"
