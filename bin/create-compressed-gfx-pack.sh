@@ -10,7 +10,7 @@ cp2 catalog "$1" | grep -E "57[2|6]" | cut -c48- | while read -r dosfilename; do
     fname=$(cd tmp/ && ls && cd ./..)
     chmod 666 tmp/"$fname" || exit 1
     truncate -s 572 tmp/"$fname" || exit 1
-    shortname="$fname" #$(echo "$fname" | cut -d"." -f2-)
+    shortname=$(echo "$fname" | tr " " ".")
     mv tmp/"$fname" tmp/"$shortname"
     cp2 add --overwrite --from-naps --strip-paths --set-int=nufx-comp-alg:8 "$2" tmp/"$shortname"
     rm tmp/"$shortname" || exit 1
