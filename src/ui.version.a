@@ -23,6 +23,6 @@ ShowVersion
          !word .version_text
          !byte $02
 .version_text
-         !raw  "TOTAL REPRINT V1.0",$00,$FF
+         !raw  "TOTAL REPRINT V1.1",$00,$FF
 
 }
